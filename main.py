@@ -17,8 +17,8 @@ class Applicant(User):
             "View Projects",
             "Apply for Projects",
             "View Application Status",
-            "Logout",
             "Request Withdrawl",
+            "Logout",
         ]
     
     def getAvailableProjects(self, projectController):
@@ -69,8 +69,8 @@ class HDBOfficer(Applicant):
             "View Projects",
             "Apply for Projects",
             "View Application Status",
-            "Logout",
             "Request Withdrawl",
+            "Logout",
         ]
 
     def getAvailableProjects(self, projectController):
@@ -144,22 +144,23 @@ class UsersController:
         else:
             return None
 
-class Applications: # Successful, unsuccessful, pending, booked
+class Application: # Successful, unsuccessful, pending, booked
     def __init__(self, applicant, project, flat_type):
         self.applicant = applicant
         self.project = project
         self.flat_type = flat_type
         self.status = "PENDING"
+        self.requestWithdraw = False
     
 class ApplicationsController:
     def __init__(self):
         self.applications = []
 
     def createApplication(self, applicant, project, flat_type):
-        self.applications.append(Applications(applicant, project, flat_type))
+        self.applications.append(Application(applicant, project, flat_type))
 
     def requestWithdraw(self, application):
-        application.status = "WITHDRAWN"
+        application.requestWithdraw = True
     
 
 class RegistrationsController:
@@ -231,7 +232,7 @@ if __name__ == "__main__":
                 if application == False:
                     print("No ongoing applications")
                 else:
-                    print(f"Project: {application.project.projectName}\nFlat Type: {application.flat_type}\nStatus: {application.status}")
+                    print(f"Project: {application.project.projectName}\nFlat Type: {application.flat_type}\nStatus: {application.status} (Withdrawing: {application.requestWithdraw})")
                 print()
             elif option == "Request Withdrawl":
                 application = currentUser.getOngoingApplications(applicationsController)
