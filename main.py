@@ -18,6 +18,7 @@ class Applicant(User):
             "Apply for Projects",
             "View Application Status",
             "Logout",
+            "Request Withdrawl",
         ]
     
     def getAvailableProjects(self, projectController):
@@ -51,6 +52,8 @@ class Applicant(User):
             return True, "Eligible to apply for project"
 
     def applyForProject(self, project, flat_type, applicationController):
+        if flat_type not in [2, 3]:
+            return False, "Invalid flat type"
         eligibility, message = self.verifyApplicationEligibility(project, flat_type, applicationController)
         if eligibility:
             applicationController.createApplication(self, project, flat_type)
@@ -67,6 +70,7 @@ class HDBOfficer(Applicant):
             "Apply for Projects",
             "View Application Status",
             "Logout",
+            "Request Withdrawl",
         ]
 
     def getAvailableProjects(self, projectController):
@@ -153,6 +157,9 @@ class ApplicationsController:
 
     def createApplication(self, applicant, project, flat_type):
         self.applications.append(Applications(applicant, project, flat_type))
+
+    def requestWithdraw(self, application):
+        application.status = "WITHDRAWN"
     
 
 class RegistrationsController:
@@ -225,6 +232,14 @@ if __name__ == "__main__":
                     print("No ongoing applications")
                 else:
                     print(f"Project: {application.project.projectName}\nFlat Type: {application.flat_type}\nStatus: {application.status}")
+                print()
+            elif option == "Request Withdrawl":
+                application = currentUser.getOngoingApplications(applicationsController)
+                if application == False:
+                    print("No ongoing applications")
+                else:
+                    applicationsController.requestWithdraw(application)
+                    print("Requested to withdraw application")
                 print()
             elif option == "Logout":
                 print("Logout")
