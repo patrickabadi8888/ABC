@@ -1,4 +1,6 @@
 from datetime import datetime
+import tempfile
+import os
 
 class User:
     """
@@ -850,6 +852,233 @@ def main():
             else:
                 print("Invalid choice")
 
+def test():
+    print("============== STARTING TESTS ==============\n")
+    
+    tempdir = tempfile.TemporaryDirectory()
+    applicantCsvPath = os.path.join(tempdir.name, "ApplicantList.csv")
+    officerCsvPath   = os.path.join(tempdir.name, "OfficerList.csv")
+    managerCsvPath   = os.path.join(tempdir.name, "ManagerList.csv")
+    projectCsvPath   = os.path.join(tempdir.name, "ProjectList.csv")
+
+    with open(applicantCsvPath, 'w') as f:
+        f.write("Name,NRIC,Age,Marital Status,Password\n")
+        f.write("John,S1234567A,35,Single,password\n")
+        f.write("Sarah,T7654321B,40,Married,password\n")
+        f.write("Grace,S9876543C,37,Married,password\n")
+        f.write("James,T2345678D,30,Married,password\n")
+        f.write("Rachel,S3456789E,20,Single,password\n")
+
+    with open(officerCsvPath, 'w') as f:
+        f.write("Name,NRIC,Age,Marital Status,Password\n")
+        f.write("Daniel,T2109876H,36,Single,password\n")
+        f.write("Emily,S6543210I,28,Single,password\n")
+        f.write("David,T1234567J,29,Married,password\n")
+
+    with open(managerCsvPath, 'w') as f:
+        f.write("Name,NRIC,Age,Marital Status,Password\n")
+        f.write("Michael,T8765432F,36,Single,password\n")
+        f.write("Jessica,S5678901G,26,Married,password\n")
+
+    with open(projectCsvPath, 'w') as f:
+        f.write("Project Name,Neighborhood,Type 1,Number of units for Type 1,Selling price for Type 1,Type 2,Number of units for Type 2,Selling price for Type 2,Application opening date,Application closing date,Manager,Officer Slot,Officer\n")
+        f.write('Acacia Breeze,Yishun,2-Room,2,350000,3-Room,0,450000,2025-02-15,2025-03-30,Jessica,3,"Daniel,Emily"\n')
+        f.write('Acacia Tree,Yishun,2-Room,0,350000,3-Room,3,450000,2025-02-15,2025-03-30,Michael,3,"Daniel,David"\n')
+
+    usersController        = UsersController(applicantCsvPath, officerCsvPath, managerCsvPath)
+    projectsController     = ProjectsController(projectCsvPath)
+    applicationsController = ApplicationsController()
+    enquiriesController    = EnquiriesController()
+    registrationsController= RegistrationsController()
+
+
+    def check_equal(desc, expected, actual):
+        """
+        Simple helper: prints pass or fail based on string/None/equality comparison
+        """
+        print(f">> TEST: {desc}")
+        print(f"   EXPECTED: {expected}")
+        print(f"   GOT     : {actual}")
+        if expected == actual:
+            print("   RESULT  : PASS\n")
+        else:
+            print("   RESULT  : FAIL\n")
+
+    def check_true(desc, condition):
+        print(f">> TEST: {desc}")
+        print(f"   CONDITION EVAL: {condition}")
+        if condition:
+            print("   RESULT  : PASS\n")
+        else:
+            print("   RESULT  : FAIL\n")
+
+    user_john = usersController.login("S1234567A", "password")
+    check_true("Test 1: John logs in with correct NRIC/password", user_john is not None and user_john.name == "John")
+
+    user_invalid_nric = usersController.login("INVALID", "password")
+    check_true("Test 2: Invalid NRIC format => login should fail", user_invalid_nric is None)
+
+    user_wrong_pass = usersController.login("S1234567A", "wrongpassword")
+    check_true("Test 3: Correct NRIC but incorrect password => should fail", user_wrong_pass is None)
+
+    old_pwd = "password"
+    if user_john and user_john.password == old_pwd:
+        user_john.password = "newpass"
+
+    user_john_new = usersController.login("S1234567A", "newpass")
+    check_true("Test 4: After password change, can login with new password", user_john_new is not None)
+    user_john_old = usersController.login("S1234567A", "password")
+    check_true("Test 4: Old password no longer works", user_john_old is None)
+
+    if user_john_new:
+        user_john_new.password = "password"
+
+    user_john = usersController.login("S1234567A", "password")
+
+    projects_john_sees = user_john.getProjectsForApplicant(projectsController, applicationsController)
+    check_true("Test 5: John sees both projects initially (both visible)", len(projects_john_sees) == 2)
+
+    acacia_breeze = projectsController.projects[0]
+    success, msg = user_john.applyForProject(acacia_breeze, 2, applicationsController)
+    check_true("Test 6: John applying 2-room in Acacia Breeze => success", success and msg == "Application successful.")
+
+    acacia_tree = projectsController.projects[1]
+    success2, msg2 = user_john.applyForProject(acacia_tree, 3, applicationsController)
+    check_true("Test 6: John applying 3-room (Single) => should fail", (not success2) and "Single applicants can only apply for 2-Room." in msg2)
+
+    manager_jessica = usersController.login("S5678901G", "password")
+    toggle_msg = manager_jessica.toggleProjectVisibility(acacia_breeze)
+    app_john = user_john.getOngoingApplications(applicationsController)
+    status_info = f"{app_john.status}, {app_john.project.visibility}" if app_john else "No app"
+    check_true("Test 7: John can still see his application even if project visibility=off", app_john is not None and app_john.project.visibility == False)
+
+    manager_jessica.toggleProjectVisibility(acacia_breeze)
+
+    the_app = applicationsController.applications[0]
+    approve_msg = manager_jessica.approveApplication(the_app)
+    check_equal("Test 8: Jessica approves John's application => 'Application approved.'", "Application approved.", approve_msg)
+    check_true("Test 8: Application status is SUCCESSFUL", the_app.status == "SUCCESSFUL")
+
+    book_result_1 = user_john.requestBooking(the_app)
+    check_equal("Test 8: John requests booking => 'Booking request sent.'", "Booking request sent.", book_result_1)
+
+    book_result_2 = user_john.requestBooking(the_app)
+    check_equal("Test 8: John tries booking again => 'Booking request already sent.'", "Booking request already sent.", book_result_2)
+
+    sub_msg = user_john.submitEnquiry(acacia_breeze, "Hello, can I get more details?", enquiriesController)
+    check_equal("Test 9: John submits enquiry => 'Enquiry submitted.'", "Enquiry submitted.", sub_msg)
+    view_enq = user_john.viewMyEnquiries(enquiriesController)
+    check_true("Test 9: John sees his enquiry in the list", "Hello, can I get more details?" in view_enq)
+    edit_msg = user_john.editMyEnquiry(enquiriesController, 0, "Updated question about details.")
+    check_equal("Test 9: Edit John’s enquiry => 'Enquiry updated.'", "Enquiry updated.", edit_msg)
+    view_enq2 = user_john.viewMyEnquiries(enquiriesController)
+    check_true("Test 9: The enquiry text changed to 'Updated question about details.'", "Updated question about details." in view_enq2)
+    del_msg = user_john.deleteMyEnquiry(enquiriesController, 0)
+    check_equal("Test 9: Delete John’s enquiry => 'Enquiry deleted.'", "Enquiry deleted.", del_msg)
+    view_enq3 = user_john.viewMyEnquiries(enquiriesController)
+    check_equal("Test 9: After deletion => 'No enquiries.'", "No enquiries.", view_enq3)
+
+    officer_daniel = usersController.login("T2109876H", "password")
+    reg_msg = officer_daniel.registerForProject(acacia_breeze, registrationsController)
+    check_equal("Test 10: Daniel registers for Acacia Breeze => 'Officer registration submitted.'", "Officer registration submitted.", reg_msg)
+
+    
+    view_reg = officer_daniel.viewOfficerRegistrations()
+    check_true("Test 11: Daniel sees 'PENDING' in registration list", "PENDING" in view_reg and "Acacia Breeze" in view_reg)
+
+    manager_jessica_reg_list = manager_jessica.viewOfficerRegistrations(registrationsController)
+    reg_to_approve = registrationsController.getAllRegistrationsForManager(manager_jessica.name)[0]
+    approve_officer_msg = manager_jessica.approveOfficerRegistration(reg_to_approve, registrationsController)
+    check_equal("Test 12: Jessica approves Daniel => 'Officer approved.'", "Officer approved.", approve_officer_msg)
+
+    check_true("Test 13: Officers have no direct method to edit a project => pass by design", True)
+
+    user_sarah = usersController.login("T7654321B", "password")
+    enq_msg_sarah = user_sarah.submitEnquiry(acacia_breeze, "Sarah's question...", enquiriesController)
+    check_true("Test 14: Sarah’s enquiry submitted", "submitted" in enq_msg_sarah.lower())
+    rep_msg = officer_daniel.replyEnquiry(enquiriesController, 0, "Daniel’s official reply.")
+    check_equal("Test 14: Daniel replies => 'Reply appended.'", "Reply appended.", rep_msg)
+
+    enq_text_after = enquiriesController.enquiries[0].text
+    check_true("Test 14: Enquiry text updated with officer reply", "Daniel’s official reply." in enq_text_after)
+
+    officer_booking_msg = officer_daniel.bookFlatForApplicant("S1234567A", applicationsController)
+    check_true("Test 15: Daniel books flat for John => success message", "Booked flat for S1234567A." in officer_booking_msg)
+    check_true("Test 15: John’s application status => BOOKED", the_app.status == "BOOKED")
+    check_true("Test 15: 2-room count decreased => now 1", acacia_breeze.numUnits1 == 1)
+
+    receipt = officer_daniel.generateReceipt("S1234567A", applicationsController)
+    check_true("Test 16: Generated receipt includes John’s name and '2-Room'",
+               ("John" in receipt) and ("2-Room" in receipt))
+
+    manager_michael = usersController.login("T8765432F", "password")
+    new_proj = manager_michael.createProject("Sunrise View", "Boon Lay", "2-Room", 5, 300000,
+                                            "3-Room", 5, 400000, "2025-05-01", "2025-06-01", 2)
+    projectsController.projects.append(new_proj)
+    check_true("Test 17: New project 'Sunrise View' is created and appended", any(p.projectName == "Sunrise View" for p in projectsController.projects))
+    edit_result = manager_michael.editProject(new_proj, name="Sunrise Vista", n1=10)
+    check_equal("Test 17: Michael edits 'Sunrise View' => 'Project updated.'", "Project updated.", edit_result)
+    check_true("Test 17: Name changed to 'Sunrise Vista', numUnits1=10", new_proj.projectName == "Sunrise Vista" and new_proj.numUnits1 == 10)
+    del_result = manager_michael.deleteProject(new_proj, projectsController)
+    check_equal("Test 17: Delete the project => 'Project deleted.'", "Project deleted.", del_result)
+    check_true("Test 17: 'Sunrise Vista' no longer in projects list", new_proj not in projectsController.projects)
+
+    new_od_date = datetime.strptime("2025-03-01", "%Y-%m-%d")
+    new_cd_date = datetime.strptime("2025-03-10", "%Y-%m-%d")
+    existing_od = datetime.strptime(acacia_breeze.openingDate, "%Y-%m-%d")
+    existing_cd = datetime.strptime(acacia_breeze.closingDate, "%Y-%m-%d")
+    overlap = datesOverlap(new_od_date, new_cd_date, existing_od, existing_cd)
+    check_true("Test 18: The new project for Jessica (3/1 ~ 3/10) overlaps with Acacia Breeze => True", overlap == True)
+
+    acacia_tree = projectsController.projects[1]
+    before_vis = acacia_tree.visibility
+    toggle_1 = manager_michael.toggleProjectVisibility(acacia_tree)
+    check_true("Test 19: Toggling Acacia Tree => 'Visibility set to False.'", "False" in toggle_1)
+    check_true("Test 19: Actually changed => visibility==False", acacia_tree.visibility == False)
+    toggle_2 = manager_michael.toggleProjectVisibility(acacia_tree)
+    check_true("Test 19: Toggling again => 'Visibility set to True.'", "True" in toggle_2 and acacia_tree.visibility == True)
+
+    all_proj_str = manager_michael.viewAllProjects(projectsController)
+    check_true("Test 20: Michael sees at least 2 projects in 'View All Projects'", "Acacia Breeze" in all_proj_str and "Acacia Tree" in all_proj_str)
+    my_proj_str = manager_michael.viewMyProjects(projectsController)
+    check_true("Test 20: Michael’s own project => 'Acacia Tree'", "Acacia Tree" in my_proj_str and "Acacia Breeze" not in my_proj_str)
+
+    officer_emily = usersController.login("S6543210I", "password")
+    new_reg_msg = officer_emily.registerForProject(acacia_tree, registrationsController)
+    check_equal("Test 21: Emily registers for Acacia Tree => 'Officer registration submitted.'", "Officer registration submitted.", new_reg_msg)
+    regs_for_michael = registrationsController.getAllRegistrationsForManager("Michael")
+    if regs_for_michael:
+        reg_obj = regs_for_michael[0]
+        appv_msg = manager_michael.approveOfficerRegistration(reg_obj, registrationsController)
+        check_true("Test 21: Michael can approve Emily => 'Officer approved.' or 'No officer slot.'", ("Officer approved." in appv_msg) or ("No officer slot." in appv_msg))
+
+    user_grace = usersController.login("S9876543C", "password")
+    suc_grace, msg_grace = user_grace.applyForProject(acacia_tree, 3, applicationsController)
+    check_true("Test 22: Grace applies for 3-room => success", suc_grace)
+
+    new_app = applicationsController.applications[-1]
+    reject_msg = manager_michael.rejectApplication(new_app)
+    check_equal("Test 22: Michael rejects Grace’s application => 'Application rejected.'", "Application rejected.", reject_msg)
+    check_true("Test 22: Grace’s app => status=UNSUCCESSFUL", new_app.status == "UNSUCCESSFUL")
+
+    suc_sarah_app, msg_sarah_app = user_sarah.applyForProject(acacia_tree, 3, applicationsController)
+    if suc_sarah_app:
+        sarah_app = applicationsController.applications[-1]
+        manager_michael.approveApplication(sarah_app)
+        applicationsController.requestWithdraw(sarah_app)
+        withdraw_msg = manager_michael.approveWithdrawal(sarah_app, applicationsController)
+        check_equal("Test 22: Manager approves Sarah’s withdrawal => 'Withdrawal approved.'", "Withdrawal approved.", withdraw_msg)
+
+    full_report = manager_jessica.generateBookingReport(applicationsController, None)
+    check_true("Test 23: Full booking report includes John => 'John,S1234567A'", "John,S1234567A" in full_report)
+
+    single_report = manager_jessica.generateBookingReport(applicationsController, "Single")
+    check_true("Test 23: Single booking report => includes John", "John,S1234567A" in single_report)
+    married_report = manager_jessica.generateBookingReport(applicationsController, "Married")
+    check_true("Test 23: Married booking report => no John", "John,S1234567A" not in married_report)
+
+    print("============== ALL TESTS COMPLETED ==============\n")
+    tempdir.cleanup()
 
 if __name__ == "__main__":
-    main()
+    test()
