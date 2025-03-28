@@ -18,6 +18,10 @@ class Applicant(User):
             "Apply for Projects",
             "View Application Status",
             "Request Withdrawl",
+            "Submit Enquiry",
+            "View My Enquiries",
+            "Edit My Enquiry",
+            "Delete My Enquiry",
             "Logout",
         ]
     
@@ -60,6 +64,35 @@ class Applicant(User):
             return True, "Application successful"
         else:
             return False, message
+        
+    def submitEnquiry(self, project, text, enquiriesController):
+        enquiriesController.createEnquiry(self, project, text)
+        return "Enquiry submitted successfully"
+
+    def viewMyEnquiries(self, enquiriesController):
+        my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
+        if not my_enquiries:
+            return "You have no enquiries"
+        message = "Your Enquiries:\n"
+        for i, enquiry in my_enquiries:
+            message += f"Index: {i} | Project: {enquiry.project.projectName} | Text: {enquiry.text}\n"
+        return message
+
+    def editMyEnquiry(self, enquiriesController, enquiry_index, new_text):
+        my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
+        for i, enquiry in my_enquiries:
+            if i == enquiry_index:
+                enquiriesController.editEnquiry(enquiry, new_text)
+                return "Enquiry updated successfully"
+        return "Invalid enquiry index"
+
+    def deleteMyEnquiry(self, enquiriesController, enquiry_index):
+        my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
+        for i, enquiry in my_enquiries:
+            if i == enquiry_index:
+                enquiriesController.deleteEnquiry(enquiry)
+                return "Enquiry deleted"
+        return "Invalid enquiry index"
 class HDBOfficer(Applicant):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
@@ -192,11 +225,37 @@ class ProjectsController:
         for parts in result:
             self.projects.append(Project(parts[0], parts[1], parts[2], int(parts[3]), int(parts[4]), parts[5], int(parts[6]), int(parts[7]), parts[8], parts[9], parts[10], parts[11], parts[12]))
 
+class Enquiry:
+    def __init__(self, applicant, project, text):
+        self.applicant = applicant
+        self.project = project
+        self.text = text
+
+class EnquiriesController:
+    def __init__(self):
+        self.enquiries = []
+
+    def createEnquiry(self, applicant, project, text):
+        self.enquiries.append(Enquiry(applicant, project, text))
+
+    def getEnquiriesByApplicant(self, applicant):
+        results = []
+        for i, enquiry in enumerate(self.enquiries):
+            if enquiry.applicant == applicant:
+                results.append((i, enquiry))
+        return results
+
+    def editEnquiry(self, enquiry, new_text):
+        enquiry.text = new_text
+
+    def deleteEnquiry(self, enquiry):
+        self.enquiries.remove(enquiry)
 
 if __name__ == "__main__":
     usersController = UsersController('ApplicantList.csv', 'OfficerList.csv', 'ManagerList.csv')
     projectsController = ProjectsController('ProjectList.csv')
     applicationsController = ApplicationsController()
+    enquiriesController = EnquiriesController()
 
     currentUser = None
     while True:
@@ -241,6 +300,28 @@ if __name__ == "__main__":
                 else:
                     applicationsController.requestWithdraw(application)
                     print("Requested to withdraw application")
+                print()
+            elif option == "Submit Enquiry":
+                project_id = input("Enter project ID to submit enquiry about: ")
+                project = projectsController.projects[int(project_id)]
+                text = input("Enter your enquiry text: ")
+                response = currentUser.submitEnquiry(project, text, enquiriesController)
+                print(response)
+                print()
+            elif option == "View My Enquiries":
+                response = currentUser.viewMyEnquiries(enquiriesController)
+                print(response)
+                print()
+            elif option == "Edit My Enquiry":
+                enquiry_idx = int(input("Enter the index of the enquiry you want to edit: "))
+                new_text = input("Enter new enquiry text: ")
+                response = currentUser.editMyEnquiry(enquiriesController, enquiry_idx, new_text)
+                print(response)
+                print()
+            elif option == "Delete My Enquiry":
+                enquiry_idx = int(input("Enter the index of the enquiry you want to delete: "))
+                response = currentUser.deleteMyEnquiry(enquiriesController, enquiry_idx)
+                print(response)
                 print()
             elif option == "Logout":
                 print("Logout")
