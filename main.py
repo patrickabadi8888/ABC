@@ -118,6 +118,21 @@ class HDBOfficer(Applicant):
     def applyForProject(self, project, flat_type, applicationController):
         return super().applyForProject(project, flat_type, applicationController)
     
+    def submitEnquiry(self, project, text, enquiriesController):
+        return super().submitEnquiry(project, text, enquiriesController)
+    
+    def viewMyEnquiries(self, enquiriesController):
+        return super().viewMyEnquiries(enquiriesController)
+    
+    def editMyEnquiry(self, enquiriesController, enquiry_index, new_text):
+        return super().editMyEnquiry(enquiriesController, enquiry_index, new_text)
+    
+    def deleteMyEnquiry(self, enquiriesController, enquiry_index):
+        return super().deleteMyEnquiry(enquiriesController, enquiry_index)
+    
+    def getOngoingApplications(self, applicationsController):
+        return super().getOngoingApplications(applicationsController)
+    
 class HDBManager(User):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
