@@ -103,6 +103,10 @@ class HDBOfficer(Applicant):
             "Apply for Projects",
             "View Application Status",
             "Request Withdrawl",
+            "Submit Enquiry",
+            "View My Enquiries",
+            "Edit My Enquiry",
+            "Delete My Enquiry",
             "Logout",
         ]
 
