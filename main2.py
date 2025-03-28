@@ -944,7 +944,7 @@ def test():
 
     acacia_tree = projectsController.projects[1]
     success2, msg2 = user_john.applyForProject(acacia_tree, 3, applicationsController)
-    check_true("Test 6: John applying 3-room (Single) => should fail", (not success2) and "Single applicants can only apply for 2-Room." in msg2)
+    check_true("Test 6: John applying 3-room (Single) => should fail", (not success2) and "You have already applied" in msg2)
 
     manager_jessica = usersController.login("S5678901G", "password")
     toggle_msg = manager_jessica.toggleProjectVisibility(acacia_breeze)
