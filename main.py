@@ -2,7 +2,7 @@ class User:
     def __init__(self, name, nric, age, maritalStatus, password):
         self.name = name
         self.nric = nric
-        self.age = age
+        self.age = int(age)
         self.maritalStatus = maritalStatus
         self.password = password
 
@@ -26,7 +26,37 @@ class Applicant(User):
             if project.visibility:
                 projects.append(f"ID: {i}\nName: {project.projectName}\nNeighborhood: {project.neighborhood}\n{project.type1}: {project.numUnits1} ({project.price1})\n{project.type2}: {project.numUnits2} ({project.price2})\nApplication Date: {project.openingDate}-{project.closingDate}")
         return projects
-                
+    
+    def getOngoingApplications(self, applicationsController):
+        for application in applicationsController.applications:
+            if application.applicant == self:
+                return application
+            
+        return False
+    
+    def verifyApplicationEligibility(self, project, flat_type, applicationController):
+        if self.getOngoingApplications(applicationController) != False:
+            return False, "You have already applied for a flat"
+        if self.maritalStatus == "Single" and self.age < 35:
+            return False, "Single applicants must be at least 35 years old"
+        elif self.maritalStatus == "Single" and flat_type != 2:
+            return False, "Single applicants can only apply for 2-room flats"
+        elif self.maritalStatus == "Married" and self.age < 21:
+            return False, "Married applicants must be at least 21 years old"
+        elif flat_type == 2 and project.numUnits1 == 0:
+            return False, "No more 2-room flats available"
+        elif flat_type == 3 and project.numUnits2 == 0:
+            return False, "No more 3-room flats available"
+        else:
+            return True, "Eligible to apply for project"
+
+    def applyForProject(self, project, flat_type, applicationController):
+        eligibility, message = self.verifyApplicationEligibility(project, flat_type, applicationController)
+        if eligibility:
+            applicationController.createApplication(self, project, flat_type)
+            return True, "Application successful"
+        else:
+            return False, message
 class HDBOfficer(Applicant):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
@@ -102,8 +132,20 @@ class UsersController:
         else:
             return None
 
-class ApplicantsController:
-    ...
+class Applications: # Successful, unsuccessful, pending, booked
+    def __init__(self, applicant, project, flat_type):
+        self.applicant = applicant
+        self.project = project
+        self.flat_type = flat_type
+        self.status = "PENDING"
+    
+class ApplicationsController:
+    def __init__(self):
+        self.applications = []
+
+    def createApplication(self, applicant, project, flat_type):
+        self.applications.append(Applications(applicant, project, flat_type))
+    
 
 class RegistrationsController:
     ...
@@ -138,6 +180,7 @@ class ProjectsController:
 if __name__ == "__main__":
     usersController = UsersController('ApplicantList.csv', 'OfficerList.csv', 'ManagerList.csv')
     projectsController = ProjectsController('ProjectList.csv')
+    applicationsController = ApplicationsController()
 
     currentUser = None
     while True:
@@ -160,7 +203,11 @@ if __name__ == "__main__":
                     print(project)
                     print()
             elif choice == "2":
-                print("Apply for Projects")
+                project_id = input("Enter project ID: ")
+                project = projectsController.projects[int(project_id)]
+                flat_type = input("Enter rooms (2 or 3): ")
+                success, message = currentUser.applyForProject(project, int(flat_type), applicationsController)
+                print(message)
             elif choice == "3":
                 print("View Application Status")
             elif choice == "4":
