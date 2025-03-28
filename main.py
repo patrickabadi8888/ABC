@@ -71,6 +71,16 @@ class HDBOfficer(Applicant):
 
     def getAvailableProjects(self, projectController):
         return super().getAvailableProjects(projectController)
+    
+    def getOngoingApplications(self, applicationsController):
+        return super().getOngoingApplications(applicationsController)
+    
+    def verifyApplicationEligibility(self, project, flat_type, applicationController):
+        return super().verifyApplicationEligibility(project, flat_type, applicationController)
+    
+    def applyForProject(self, project, flat_type, applicationController):
+        return super().applyForProject(project, flat_type, applicationController)
+    
 class HDBManager(User):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
