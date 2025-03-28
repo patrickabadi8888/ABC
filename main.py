@@ -39,6 +39,8 @@ class HDBOfficer(Applicant):
             "Logout",
         ]
 
+    def getAvailableProjects(self, projectController):
+        return super().getAvailableProjects(projectController)
 class HDBManager(User):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
