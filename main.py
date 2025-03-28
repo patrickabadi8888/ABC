@@ -16,7 +16,7 @@ class Applicant(User):
         return [
             "View Projects",
             "Apply for Projects",
-            "View Application Status",
+            "View Application Status (Book)",
             "Request Withdrawl",
             "Submit Enquiry",
             "View My Enquiries",
@@ -93,6 +93,16 @@ class Applicant(User):
                 enquiriesController.deleteEnquiry(enquiry)
                 return "Enquiry deleted"
         return "Invalid enquiry index"
+    
+    def requestBooking(self, application):
+        if application.status == "SUCCESSFUL":
+            application.requestedBooking = True
+            return "Booking request sent to HDB Officer"
+        elif application.status == "BOOKED":
+            return "You have already booked a flat"
+        elif application.status != "SUCCESSFUL":
+            return f"Cannot request booking because application status is {application.status}"
+        
 class HDBOfficer(Applicant):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
@@ -101,7 +111,7 @@ class HDBOfficer(Applicant):
         return [
             "View Projects",
             "Apply for Projects",
-            "View Application Status",
+            "View Application Status (Book)",
             "Request Withdrawl",
             "Submit Enquiry",
             "View My Enquiries",
@@ -137,15 +147,51 @@ class HDBOfficer(Applicant):
     def getOngoingApplications(self, applicationsController):
         return super().getOngoingApplications(applicationsController)
     
+    def requestBooking(self, application):
+        return super().requestBooking(application)
+    
 class HDBManager(User):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
     
     def menu(self):
         return [
-            "View Projects",
+            "View Applications",
+            "Approve Application",
+            "Reject Application",
+            "Approve Withdrawal",
             "Logout",
         ]
+    
+    def viewApplications(self, applicationsController):
+        applications = applicationsController.applications
+        message = "Applications:\n"
+        for i, application in enumerate(applications):
+            if application.project.manager == self.name:
+                message += f"Index: {i} | Applicant: {application.applicant.name} | Project: {application.project.projectName} | Flat Type: {application.flat_type} | Status: {application.status}\n"
+        return message
+    
+    def approveApplication(self, application):
+        if application.project.manager != self.name:
+            return "You are not the manager of this project"
+        application.status = "SUCCESSFUL"
+        return f"Application for {application.project.projectName} has been APPROVED."
+    
+    def rejectApplication(self, application):
+        if application.project.manager != self.name:
+            return "You are not the manager of this project"
+        application.status = "UNSUCCESSFUL"
+        return f"Application for {application.project.projectName} has been REJECTED."
+
+    def approveWithdrawal(self, application, applicationsController):
+        if application.project.manager != self.name:
+            return "You are not the manager of this project"
+        
+        if application in applicationsController.applications:
+            applicationsController.applications.remove(application)
+            return f"Withdrawal request approved"
+        else:
+            return "Application not found"
 class Project:
     def __init__(self, projectName, neighborhood, type1, numUnits1, price1, type2, numUnits2, price2, openingDate, closingDate, manager, officerSlot, officer):
         self.projectName = projectName
@@ -203,6 +249,7 @@ class Application: # Successful, unsuccessful, pending, booked
         self.flat_type = flat_type
         self.status = "PENDING"
         self.requestWithdraw = False
+        self.requestedBooking = False
     
 class ApplicationsController:
     def __init__(self):
@@ -214,7 +261,6 @@ class ApplicationsController:
     def requestWithdraw(self, application):
         application.requestWithdraw = True
     
-
 class RegistrationsController:
     ...
 
@@ -305,12 +351,41 @@ if __name__ == "__main__":
                 success, message = currentUser.applyForProject(project, int(flat_type), applicationsController)
                 print(message)
                 print()
-            elif option == "View Application Status":
+            elif option == "View Application Status (Book)":
                 application = currentUser.getOngoingApplications(applicationsController)
-                if application == False:
+                if not application:
                     print("No ongoing applications")
                 else:
-                    print(f"Project: {application.project.projectName}\nFlat Type: {application.flat_type}\nStatus: {application.status} (Withdrawing: {application.requestWithdraw})")
+                    print(f"Project: {application.project.projectName}")
+                    print(f"Flat Type: {application.flat_type}")
+                    print(f"Status: {application.status} (Withdrawing: {application.requestWithdraw})")
+                    
+                    if application.status == "SUCCESSFUL":
+                        choice2 = input("Do you want to request a booking for this flat? (y/n): ")
+                        if choice2.lower() == 'y':
+                            print(currentUser.requestBooking(application))
+                print()
+            elif option == "View Applications":
+                response = currentUser.viewApplications(applicationsController)
+                print(response)
+                print()
+            elif option == "Approve Application":
+                application_idx = int(input("Enter the index of the application you want to approve: "))
+                application = applicationsController.applications[application_idx]
+                response = currentUser.approveApplication(application)
+                print(response)
+                print()
+            elif option == "Reject Application":
+                application_idx = int(input("Enter the index of the application you want to reject: "))
+                application = applicationsController.applications[application_idx]
+                response = currentUser.rejectApplication(application)
+                print(response)
+                print()
+            elif option == "Approve Withdrawal":
+                application_idx = int(input("Enter the index of the application you want to approve withdrawal for: "))
+                application = applicationsController.applications[application_idx]
+                response = currentUser.approveWithdrawal(application, applicationsController)
+                print(response)
                 print()
             elif option == "Request Withdrawl":
                 application = currentUser.getOngoingApplications(applicationsController)
