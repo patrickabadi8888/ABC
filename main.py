@@ -112,6 +112,8 @@ class HDBOfficer(Applicant):
             "View Projects",
             "Apply for Projects",
             "View Application Status (Book)",
+            "View Booking Requests",
+            "Accept Booking Request", 
             "Request Withdrawl",
             "Submit Enquiry",
             "View My Enquiries",
@@ -150,6 +152,45 @@ class HDBOfficer(Applicant):
     def requestBooking(self, application):
         return super().requestBooking(application)
     
+    def viewBookingRequests(self, applicationsController):
+        message = "Booking Requests:\n"
+        count = 0
+
+        for i, application in enumerate(applicationsController.applications):
+            if (application.status == "SUCCESSFUL"
+                and application.requestedBooking
+                and self.name in application.project.officer):
+                
+                message += (f"Index: {i} | Applicant: {application.applicant.name} | "
+                            f"Project: {application.project.projectName} | "
+                            f"Requested Flat Type: {application.flat_type}\n")
+                count += 1
+
+        if count == 0:
+            message += "No booking requests found.\n"
+
+        return message
+
+    def confirmBooking(self, application):
+        if application.status == "SUCCESSFUL" and application.requestedBooking:
+            if application.flat_type == 2:
+                if application.project.numUnits1 > 0:
+                    application.project.numUnits1 -= 1
+                else:
+                    return "No more 2-room flats available to book."
+            else:
+                if application.project.numUnits2 > 0:
+                    application.project.numUnits2 -= 1
+                else:
+                    return "No more 3-room flats available to book."
+
+            application.status = "BOOKED"
+            return (f"Successfully booked a {application.flat_type}-room flat "
+                    f"for {application.applicant.name} in {application.project.projectName}.")
+        else:
+            return ("Unable to confirm booking. Either the application is not "
+                    "SUCCESSFUL or no booking request was submitted.")
+
 class HDBManager(User):
     def __init__(self, name, nric, age, maritalStatus, password):
         super().__init__(name, nric, age, maritalStatus, password)
@@ -394,6 +435,27 @@ if __name__ == "__main__":
                 else:
                     applicationsController.requestWithdraw(application)
                     print("Requested to withdraw application")
+                print()
+            elif option == "View Booking Requests":
+                requests_msg = currentUser.viewBookingRequests(applicationsController)
+                print(requests_msg)
+                print()
+
+            elif option == "Accept Booking Request":
+                requests_msg = currentUser.viewBookingRequests(applicationsController)
+                
+                if "No booking requests found" in requests_msg:
+                    print(requests_msg)
+                else:
+                    print(requests_msg)
+                    app_index = input("Enter the index of the application to confirm booking: ")
+                    app_index = int(app_index)
+                    if 0 <= app_index < len(applicationsController.applications):
+                        application = applicationsController.applications[app_index]
+                        response = currentUser.confirmBooking(application)
+                        print(response)
+                    else:
+                        print("Invalid application index")
                 print()
             elif option == "Submit Enquiry":
                 project_id = input("Enter project ID to submit enquiry about: ")
