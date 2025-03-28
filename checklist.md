@@ -1,7 +1,3 @@
-Below is the content converted into a set of Markdown checklists. Each role is separated into its own heading, with all capabilities presented as checklist items:
-
----
-
 ## Applicant
 
 - [ ] Can only view the list of projects that are:
@@ -62,8 +58,8 @@ Below is the content converted into a set of Markdown checklists. Each role is s
 - [ ] Able to filter and view the list of projects they have created
 - [ ] Able to view pending and approved HDB Officer registrations
 - [ ] Able to approve or reject HDB Officer’s registration (as the HDB Manager in charge) – also updates project’s remaining HDB Officer slots
-- [ ] Able to approve or reject Applicant’s BTO application (approval is limited by the supply of flats)
-- [ ] Able to approve or reject Applicant’s request to withdraw the application
+- [x] Able to approve or reject Applicant’s BTO application (approval is limited by the supply of flats)
+- [x] Able to approve or reject Applicant’s request to withdraw the application
 - [ ] Able to generate a report of the list of applicants with their respective flat booking:
   - Includes filters for categories (e.g. report of married applicants’ choice of flat type)
 - [ ] Cannot apply for any BTO project as an Applicant
@@ -71,3 +67,5 @@ Below is the content converted into a set of Markdown checklists. Each role is s
 - [ ] Able to view and reply to enquiries regarding the project they are handling
 
 ---
+
+- [ ] Convert getusertype to user function
