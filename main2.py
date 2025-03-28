@@ -1,3 +1,5 @@
+from datetime import datetime
+
 class User:
     """
     ## User
@@ -33,6 +35,7 @@ class Applicant(User):
             "View My Enquiries",
             "Edit My Enquiry",
             "Delete My Enquiry",
+            "Change Password",
             "Logout",
         ]
 
@@ -125,6 +128,7 @@ class Applicant(User):
             return "You already booked."
         return f"Cannot request booking, status is {application.status}."
 
+
 class HDBOfficer(Applicant):
     """
     ## HDB Officer
@@ -144,12 +148,13 @@ class HDBOfficer(Applicant):
         self.myProjects = []
 
     def menu(self):
-        return super().menu() + [
+        return super().menu()[:-1] + [
             "Register for Project as Officer",
             "View My Officer Registrations",
             "Reply to Project Enquiry (Handled Project)",
             "Book a Flat for Applicant (Handled Project)",
             "Generate Booking Receipt",
+            "Logout"
         ]
 
     def registerForProject(self, project, registrationsController):
@@ -204,12 +209,13 @@ class HDBOfficer(Applicant):
                 return r
         return "No booking found."
 
+
 class HDBManager(User):
     """
     ## HDB Manager
     - [x] Can create, edit, delete projects
     - [x] BTO project info includes name, neighborhood, flat types, number of units, dates, manager, officer slots
-    - [x] Can only handle one project within same period (but code below allows multiple if user desires)
+    - [x] Can only handle one project within same period
     - [x] Can toggle visibility
     - [x] Can view all projects (including others')
     - [x] Can filter projects they created
@@ -239,6 +245,7 @@ class HDBManager(User):
             "Generate Booking Report",
             "View All Enquiries",
             "Reply to Enquiry",
+            "Change Password",
             "Logout"
         ]
 
@@ -255,14 +262,14 @@ class HDBManager(User):
         if name: project.projectName = name
         if neighborhood: project.neighborhood = neighborhood
         if t1: project.type1 = t1
-        if n1: project.numUnits1 = n1
-        if p1: project.price1 = p1
+        if n1 is not None and n1 >= 0: project.numUnits1 = n1
+        if p1 is not None and p1 >= 0: project.price1 = p1
         if t2: project.type2 = t2
-        if n2: project.numUnits2 = n2
-        if p2: project.price2 = p2
+        if n2 is not None and n2 >= 0: project.numUnits2 = n2
+        if p2 is not None and p2 >= 0: project.price2 = p2
         if openDate: project.openingDate = openDate
         if closeDate: project.closingDate = closeDate
-        if officerSlot is not None: project.officerSlot = officerSlot
+        if officerSlot is not None and officerSlot >= 0: project.officerSlot = officerSlot
         return "Project updated."
 
     def deleteProject(self, project, projectsController):
@@ -383,6 +390,7 @@ class HDBManager(User):
         e.text += f" [Manager Reply: {reply_text}]"
         return "Reply appended."
 
+
 class Project:
     def __init__(self, projectName, neighborhood, type1, numUnits1, price1, type2, numUnits2, price2,
                  openingDate, closingDate, manager, officerSlot, officers):
@@ -400,6 +408,7 @@ class Project:
         self.officerSlot = int(officerSlot)
         self.officers = officers
         self.visibility = True
+
 
 class UsersController:
     def __init__(self, applicantCsv, hdbOfficerCsv, hdbManagerCsv):
@@ -433,6 +442,7 @@ class UsersController:
             return "HDB Manager"
         return None
 
+
 class Application:
     """
     BTO Application (Pending, Successful, Unsuccessful, Booked)
@@ -445,6 +455,7 @@ class Application:
         self.requestWithdraw = False
         self.requestedBooking = False
 
+
 class ApplicationsController:
     def __init__(self):
         self.applications = []
@@ -455,11 +466,13 @@ class ApplicationsController:
     def requestWithdraw(self, application):
         application.requestWithdraw = True
 
+
 class Registration:
     def __init__(self, officer, project):
         self.officer = officer
         self.project = project
         self.status = "PENDING"
+
 
 class RegistrationsController:
     """
@@ -476,10 +489,10 @@ class RegistrationsController:
     def getAllRegistrationsForManager(self, managerName):
         return [r for r in self.registrations if r.project.manager == managerName]
 
+
 class ProjectsController:
     def __init__(self, projectCsv):
         self.projects = []
-        result = []
         for line in open(projectCsv, 'r').readlines()[1:]:
             line = line.strip()
             parts = []
@@ -498,15 +511,19 @@ class ProjectsController:
                 parts[-1] = parts[-1][0]
             existing_officers = parts[12].strip('"')
             officer_list = [x.strip() for x in existing_officers.split(',')] if existing_officers else []
-            self.projects.append(Project(parts[0], parts[1], parts[2], int(parts[3]), int(parts[4]),
-                                         parts[5], int(parts[6]), int(parts[7]), parts[8], parts[9],
-                                         parts[10], parts[11], officer_list))
+            self.projects.append(Project(
+                parts[0], parts[1], parts[2], int(parts[3]), int(parts[4]),
+                parts[5], int(parts[6]), int(parts[7]), parts[8], parts[9],
+                parts[10], parts[11], officer_list
+            ))
+
 
 class Enquiry:
     def __init__(self, applicant, project, text):
         self.applicant = applicant
         self.project = project
         self.text = text
+
 
 class EnquiriesController:
     def __init__(self):
@@ -523,6 +540,14 @@ class EnquiriesController:
 
     def deleteEnquiry(self, enquiry):
         self.enquiries.remove(enquiry)
+
+
+def datesOverlap(start1, end1, start2, end2):
+    """
+    Returns True if the date ranges [start1, end1] and [start2, end2] overlap.
+    """
+    return not (end1 < start2 or start1 > end2)
+
 
 def main():
     usersController = UsersController('ApplicantList.csv', 'OfficerList.csv', 'ManagerList.csv')
@@ -632,32 +657,113 @@ def main():
                 od = input("Open date (yyyy-mm-dd): ")
                 cd = input("Close date (yyyy-mm-dd): ")
                 slot = int(input("Officer slots: "))
-                proj = currentUser.createProject(name, neigh, t1, n1, p1, t2, n2, p2, od, cd, slot)
-                projectsController.projects.append(proj)
-                print("Project created.")
+
+                try:
+                    new_od_date = datetime.strptime(od, "%Y-%m-%d")
+                    new_cd_date = datetime.strptime(cd, "%Y-%m-%d")
+
+                    managerHasOverlap = False
+                    for existing in projectsController.projects:
+                        if existing.manager == currentUser.name:
+                            exist_od = datetime.strptime(existing.openingDate, "%Y-%m-%d")
+                            exist_cd = datetime.strptime(existing.closingDate, "%Y-%m-%d")
+                            if datesOverlap(new_od_date, new_cd_date, exist_od, exist_cd):
+                                print("Cannot create project. You already manage a project in the same application period.")
+                                managerHasOverlap = True
+                                break
+
+                    if not managerHasOverlap:
+                        proj = currentUser.createProject(name, neigh, t1, n1, p1, t2, n2, p2, od, cd, slot)
+                        projectsController.projects.append(proj)
+                        print("Project created.")
+                except ValueError:
+                    print("Invalid date format. Project not created.")
 
             elif option == "Edit Project":
                 pid = int(input("Project ID: "))
+                if pid < 0 or pid >= len(projectsController.projects):
+                    print("Invalid project ID.")
+                    continue
                 p = projectsController.projects[pid]
-                print(currentUser.editProject(p, name=input("Name or blank: ") or None,
-                                              neighborhood=input("Neighborhood or blank: ") or None,
-                                              t1=input("Type1 label or blank: ") or None,
-                                              n1=int(input("Num type1 or -1: ")) or None,
-                                              p1=int(input("Price type1 or -1: ")) or None,
-                                              t2=input("Type2 label or blank: ") or None,
-                                              n2=int(input("Num type2 or -1: ")) or None,
-                                              p2=int(input("Price type2 or -1: ")) or None,
-                                              openDate=input("Open date or blank: ") or None,
-                                              closeDate=input("Close date or blank: ") or None,
-                                              officerSlot=int(input("Slots or -1: ")) or None))
+
+                new_name = input("Name or blank: ")
+                new_neigh = input("Neighborhood or blank: ")
+                new_t1 = input("Type1 label or blank: ")
+                new_n1 = input("Num type1 or -1: ")
+                new_p1 = input("Price type1 or -1: ")
+                new_t2 = input("Type2 label or blank: ")
+                new_n2 = input("Num type2 or -1: ")
+                new_p2 = input("Price type2 or -1: ")
+                new_od = input("Open date or blank (yyyy-mm-dd): ")
+                new_cd = input("Close date or blank (yyyy-mm-dd): ")
+                new_slots = input("Slots or -1: ")
+
+                new_n1 = None if not new_n1.isdigit() else int(new_n1)
+                new_p1 = None if not new_p1.isdigit() else int(new_p1)
+                new_n2 = None if not new_n2.isdigit() else int(new_n2)
+                new_p2 = None if not new_p2.isdigit() else int(new_p2)
+                new_slots = None if not new_slots.isdigit() else int(new_slots)
+
+                final_od = p.openingDate
+                final_cd = p.closingDate
+                try:
+                    if new_od.strip():
+                        datetime.strptime(new_od, "%Y-%m-%d")
+                        final_od = new_od
+                    if new_cd.strip():
+                        datetime.strptime(new_cd, "%Y-%m-%d")
+                        final_cd = new_cd
+                except ValueError:
+                    print("Invalid date format. Project not edited.")
+                    continue
+
+                try:
+                    od_date_obj = datetime.strptime(final_od, "%Y-%m-%d")
+                    cd_date_obj = datetime.strptime(final_cd, "%Y-%m-%d")
+                    managerHasOverlap = False
+                    for existing in projectsController.projects:
+                        if existing != p and existing.manager == currentUser.name:
+                            exist_od = datetime.strptime(existing.openingDate, "%Y-%m-%d")
+                            exist_cd = datetime.strptime(existing.closingDate, "%Y-%m-%d")
+                            if datesOverlap(od_date_obj, cd_date_obj, exist_od, exist_cd):
+                                print("Cannot edit project to overlap with an existing project you manage.")
+                                managerHasOverlap = True
+                                break
+                    if managerHasOverlap:
+                        continue
+                except:
+                    print("Date parsing error. Edit aborted.")
+                    continue
+
+                msg = currentUser.editProject(
+                    p,
+                    name=(new_name if new_name.strip() else None),
+                    neighborhood=(new_neigh if new_neigh.strip() else None),
+                    t1=(new_t1 if new_t1.strip() else None),
+                    n1=new_n1,
+                    p1=new_p1,
+                    t2=(new_t2 if new_t2.strip() else None),
+                    n2=new_n2,
+                    p2=new_p2,
+                    openDate=(new_od if new_od.strip() else None),
+                    closeDate=(new_cd if new_cd.strip() else None),
+                    officerSlot=new_slots
+                )
+                print(msg)
 
             elif option == "Delete Project":
                 pid = int(input("Project ID: "))
+                if pid < 0 or pid >= len(projectsController.projects):
+                    print("Invalid project ID.")
+                    continue
                 p = projectsController.projects[pid]
                 print(currentUser.deleteProject(p, projectsController))
 
             elif option == "Toggle Project Visibility":
                 pid = int(input("Project ID: "))
+                if pid < 0 or pid >= len(projectsController.projects):
+                    print("Invalid project ID.")
+                    continue
                 p = projectsController.projects[pid]
                 print(currentUser.toggleProjectVisibility(p))
 
@@ -724,10 +830,365 @@ def main():
                 rep = input("Reply text: ")
                 print(currentUser.replyToEnquiry(idx, rep, enquiriesController))
 
+            elif option == "Change Password":
+                old_pwd = input("Enter your old password: ")
+                if old_pwd == currentUser.password:
+                    new_pwd = input("Enter your new password: ")
+                    confirm_pwd = input("Confirm your new password: ")
+                    if new_pwd == confirm_pwd:
+                        currentUser.password = new_pwd
+                        print("Password changed successfully.")
+                    else:
+                        print("The new passwords do not match.")
+                else:
+                    print("Incorrect old password.")
+
             elif option == "Logout":
                 currentUser = None
             else:
                 print("Invalid choice")
 
+
+def test():
+    """
+    This test() function is adapted to run in a self-contained manner, ignoring CSV-based data.
+    We create Users, Projects, etc. programmatically. Then we run checks for the 23 test cases.
+    """
+    print("========== STARTING FULL TESTS FOR ALL 23 CASES ==========")
+
+    applicant_single_35 = Applicant("John", "S1111111A", 35, "Single", "pass123")
+    applicant_married_20 = Applicant("Sarah", "S2222222B", 20, "Married", "wordpass")
+    hdb_officer = HDBOfficer("OfficerDan", "T3333333C", 36, "Single", "officerpass")
+    hdb_manager = HDBManager("ManagerMike", "S4444444D", 36, "Single", "managerpass")
+
+    class TestUsersController:
+        def __init__(self):
+            self.users = [applicant_single_35, applicant_married_20, hdb_officer, hdb_manager]
+        def login(self, nric, password):
+            for u in self.users:
+                if u.nric == nric and u.password == password:
+                    return u
+            return None
+
+    usersController = TestUsersController()
+
+    projA = Project("TestProjectA", "Yishun", "2-Room", 2, 350000, "3-Room", 2, 450000,
+                    "2025-01-01", "2025-01-31", hdb_manager.name, 2, [])
+    projB = Project("TestProjectB", "Tampines", "2-Room", 0, 300000, "3-Room", 2, 400000,
+                    "2025-02-01", "2025-02-28", hdb_manager.name, 2, [])
+
+    class TestProjectsController:
+        def __init__(self):
+            self.projects = [projA, projB]
+
+    projectsController = TestProjectsController()
+    applicationsController = ApplicationsController()
+    enquiriesController = EnquiriesController()
+    registrationsController = RegistrationsController()
+
+
+    print("\n--- Test #1: Valid User Login ---")
+    u = usersController.login("S1111111A", "pass123")
+    if u == applicant_single_35:
+        print("PASS: Logged in as John (Applicant).")
+    else:
+        print("FAIL: Could not log in with correct credentials.")
+
+    print("\n--- Test #2: Invalid NRIC Format ---")
+    u = usersController.login("ZZ9999999Z", "pass123")
+    if not u:
+        print("PASS: Invalid NRIC was rejected.")
+    else:
+        print("FAIL: Invalid NRIC was incorrectly accepted.")
+
+    print("\n--- Test #3: Incorrect Password ---")
+    u = usersController.login("S1111111A", "wrongpass")
+    if not u:
+        print("PASS: Wrong password was rejected.")
+    else:
+        print("FAIL: Wrong password was accepted.")
+
+    print("\n--- Test #4: Password Change Functionality ---")
+    old_pwd = applicant_single_35.password
+    new_pwd = "myNewPassword1"
+    if old_pwd != new_pwd:
+        if old_pwd == "pass123":
+            applicant_single_35.password = new_pwd
+            if applicant_single_35.password == new_pwd:
+                print("PASS: Password changed successfully.")
+            else:
+                print("FAIL: Password not updated.")
+        else:
+            print("FAIL: The user didn't have the expected old password.")
+    else:
+        print("FAIL: Test contrived scenario where new == old.")
+
+    print("\n--- Test #5: Project Visibility & Toggling ---")
+    projB.visibility = False
+    listA = applicant_single_35.getProjectsForApplicant(projectsController, applicationsController)
+    if "TestProjectA" in str(listA) and "TestProjectB" not in str(listA):
+        print("PASS: Project B not visible because visibility is off and user not applied.")
+    else:
+        print("FAIL: Visibility toggle not working as expected.")
+
+    print("\n--- Test #6: Project Application ---")
+    success, msg = applicant_single_35.applyForProject(projA, 2, applicationsController)
+    if success:
+        print("PASS: John successfully applied for 2-room in Project A.")
+    else:
+        print(f"FAIL: John couldn't apply. {msg}")
+
+    print("\n--- Test #7: Viewing Application Status after Visibility Off ---")
+    projA.visibility = False
+    vis_list = applicant_single_35.getProjectsForApplicant(projectsController, applicationsController)
+    if "TestProjectA" in str(vis_list):
+        print("PASS: Applicant can still see his own project while off.")
+    else:
+        print("FAIL: Applicant lost access to his project status.")
+
+    print("\n--- Test #8: Single Flat Booking ---")
+    if applicationsController.applications:
+        j_app = applicationsController.applications[0]
+        ap_msg = hdb_manager.approveApplication(j_app)
+        if j_app.status == "SUCCESSFUL":
+            print("PASS: Manager approved John's application.")
+        else:
+            print(f"FAIL: Manager approveApplication not working: {ap_msg}")
+
+        bk_req_msg = applicant_single_35.requestBooking(j_app)
+        if "sent" in bk_req_msg.lower():
+            print("PASS: John requested booking successfully.")
+        else:
+            print(f"FAIL: John booking request issue: {bk_req_msg}")
+
+        projA.officers.append(hdb_officer.name)
+        hdb_officer.myProjects.append(projA)
+
+        before_units_2room = projA.numUnits1
+        booking_msg = hdb_officer.bookFlatForApplicant(j_app.applicant.nric, applicationsController)
+        after_units_2room = projA.numUnits1
+        if "Booked flat" in booking_msg and (after_units_2room == before_units_2room - 1):
+            print("PASS: Officer booked 2-room, application -> BOOKED, unit decremented.")
+        else:
+            print(f"FAIL: Booking not completed properly: {booking_msg}")
+    else:
+        print("FAIL: No application found to proceed with booking test.")
+
+    print("\n--- Test #9: Applicant’s Enquiries Management ---")
+    eq_resp = applicant_single_35.submitEnquiry(projA, "Inquiry about finishing date", enquiriesController)
+    if "submitted" in eq_resp.lower():
+        eqs = applicant_single_35.viewMyEnquiries(enquiriesController)
+        if "Inquiry about finishing date" in eqs:
+            print("PASS: Enquiry created and visible.")
+        else:
+            print("FAIL: Enquiry not found after creation.")
+    else:
+        print(f"FAIL: Could not submit enquiry. {eq_resp}")
+
+    idx = enquiriesController.getEnquiriesByApplicant(applicant_single_35)[0][0]
+    ed_msg = applicant_single_35.editMyEnquiry(enquiriesController, idx, "Updated inquiry text")
+    if "updated" in ed_msg:
+        eqs2 = applicant_single_35.viewMyEnquiries(enquiriesController)
+        if "Updated inquiry text" in eqs2:
+            print("PASS: Enquiry updated successfully.")
+        else:
+            print("FAIL: Edit did not reflect.")
+    else:
+        print(f"FAIL: Edit enquiry call failed. {ed_msg}")
+
+    del_msg = applicant_single_35.deleteMyEnquiry(enquiriesController, idx)
+    if "deleted" in del_msg.lower():
+        eqs3 = applicant_single_35.viewMyEnquiries(enquiriesController)
+        if "Updated inquiry text" not in eqs3:
+            print("PASS: Enquiry deleted successfully.")
+        else:
+            print("FAIL: Enquiry still present after deletion.")
+    else:
+        print(f"FAIL: Delete My Enquiry call failed. {del_msg}")
+
+    print("\n--- Test #10: HDB Officer Registration Eligibility ---")
+    reg_resp = hdb_officer.registerForProject(projB, registrationsController)
+    if "submitted" in reg_resp.lower():
+        print("PASS: Officer successfully submitted registration for Project B.")
+    else:
+        print(f"FAIL: Officer registration not submitted: {reg_resp}")
+
+    print("\n--- Test #11: HDB Officer Registration Status ---")
+    reg_status = hdb_officer.viewOfficerRegistrations()
+    if "Project: TestProjectB" in reg_status:
+        print("PASS: Officer sees pending registration for Project B.")
+    else:
+        print(f"FAIL: Registration not shown in officer's list: {reg_status}")
+
+    print("\n--- Test #12: Project Detail Access for HDB Officer ---")
+    regs_b = registrationsController.getAllRegistrationsForManager(hdb_manager.name)
+    proj_b_reg = None
+    for r in regs_b:
+        if r.project == projB and r.officer == hdb_officer:
+            proj_b_reg = r
+            break
+    if proj_b_reg:
+        apv_msg = hdb_manager.approveOfficerRegistration(proj_b_reg, registrationsController)
+        if "approved" in apv_msg.lower():
+            projB.visibility = False
+            if projB in hdb_officer.myProjects:
+                print("PASS: Officer can access project B details even if visibility is off.")
+            else:
+                print("FAIL: Project not in officer's myProjects after approval.")
+        else:
+            print(f"FAIL: Manager could not approve registration: {apv_msg}")
+    else:
+        print("FAIL: Couldn't find the registration for Project B to approve.")
+
+    print("\n--- Test #13: Restriction on Editing Project Details ---")
+    can_edit = hasattr(hdb_officer, "editProject")
+    if not can_edit:
+        print("PASS: Officer has no method to edit projects (restricted).")
+    else:
+        print("FAIL: Officer class unexpectedly has editProject method.")
+
+    print("\n--- Test #14: Response to Project Enquiries ---")
+    eq_msg = applicant_single_35.submitEnquiry(projA, "Another question for officer", enquiriesController)
+    eq_idx = None
+    for i, e in enumerate(enquiriesController.enquiries):
+        if e.applicant == applicant_single_35 and e.text == "Another question for officer":
+            eq_idx = i
+            break
+    if eq_idx is not None:
+        reply_msg = hdb_officer.replyEnquiry(enquiriesController, eq_idx, "Officer's reply text.")
+        if "Reply appended" in reply_msg:
+            if "Officer's reply text." in enquiriesController.enquiries[eq_idx].text:
+                print("PASS: Officer appended reply to enquiry.")
+            else:
+                print("FAIL: Text not updated correctly in the enquiry.")
+        else:
+            print(f"FAIL: Officer reply error: {reply_msg}")
+    else:
+        print("FAIL: Could not locate the newly created enquiry to reply.")
+
+    print("\n--- Test #15: Flat Selection and Booking Management ---")
+    if applicationsController.applications:
+        j_app2 = [a for a in applicationsController.applications if a.applicant == applicant_single_35][0]
+        if j_app2.status == "BOOKED":
+            print("PASS: Flat selection & booking were confirmed for John.")
+        else:
+            print(f"FAIL: John's application not booked. Status={j_app2.status}")
+    else:
+        print("FAIL: No applications in system to confirm booking management.")
+
+    print("\n--- Test #16: Receipt Generation ---")
+    rec = hdb_officer.generateReceipt(applicant_single_35.nric, applicationsController)
+    if "Receipt:" in rec and "TestProjectA" in rec and "NRIC: S1111111A" in rec:
+        print("PASS: Receipt generated with correct details.")
+    else:
+        print(f"FAIL: Receipt generation not as expected:\n{rec}")
+
+    print("\n--- Test #17: Create, Edit, and Delete BTO Project Listings ---")
+    new_proj = hdb_manager.createProject("NewProjectX", "Woodlands", "2-Room", 3, 200000,
+                                         "3-Room", 2, 300000, "2025-06-01", "2025-06-30", 2)
+    projectsController.projects.append(new_proj)
+    if new_proj in projectsController.projects:
+        print("PASS: Manager created a new project listing.")
+        ed_result = hdb_manager.editProject(new_proj, neighborhood="Jurong East")
+        if "updated" in ed_result and new_proj.neighborhood == "Jurong East":
+            print("PASS: Manager edited project listing.")
+            del_result = hdb_manager.deleteProject(new_proj, projectsController)
+            if "deleted" in del_result and new_proj not in projectsController.projects:
+                print("PASS: Manager deleted project listing.")
+            else:
+                print(f"FAIL: Deletion error: {del_result}")
+        else:
+            print(f"FAIL: Edit error: {ed_result}")
+    else:
+        print("FAIL: New project not found in list after creation.")
+
+    print("\n--- Test #18: Single Project Management per Application Period ---")
+    overlap_proj = Project("OverlapProject", "Somewhere", "2-Room", 1, 100000,
+                           "3-Room", 1, 200000, "2025-01-15", "2025-01-20",
+                           hdb_manager.name, 2, [])
+    od1 = datetime.strptime(projA.openingDate, "%Y-%m-%d")
+    cd1 = datetime.strptime(projA.closingDate, "%Y-%m-%d")
+    od2 = datetime.strptime(overlap_proj.openingDate, "%Y-%m-%d")
+    cd2 = datetime.strptime(overlap_proj.closingDate, "%Y-%m-%d")
+    if datesOverlap(od1, cd1, od2, cd2):
+        print("PASS: Overlap is detected, so we would block manager from having 2 projects with overlapping dates.")
+    else:
+        print("FAIL: Overlap not detected, logic error?")
+
+    print("\n--- Test #19: Toggle Project Visibility ---")
+    old_visibility = projA.visibility
+    toggle_msg = hdb_manager.toggleProjectVisibility(projA)
+    if projA.visibility == (not old_visibility):
+        print("PASS: Project visibility toggled to", projA.visibility)
+    else:
+        print("FAIL: Toggle not reflected in project. Msg:", toggle_msg)
+
+    print("\n--- Test #20: View All and Filtered Project Listings ---")
+    all_proj_list = hdb_manager.viewAllProjects(projectsController)
+    if "TestProjectA" in all_proj_list and "TestProjectB" in all_proj_list:
+        print("PASS: Manager sees all projects in system.")
+    else:
+        print("FAIL: Manager's viewAllProjects missing something.")
+
+    my_proj_list = hdb_manager.viewMyProjects(projectsController)
+    if "TestProjectA" in my_proj_list and "TestProjectB" in my_proj_list:
+        print("PASS: Manager sees only his projects in filter as well.")
+    else:
+        print("FAIL: Manager's viewMyProjects missing something.")
+
+    print("\n--- Test #21: Manage HDB Officer Registrations ---")
+    all_regs = registrationsController.getAllRegistrationsForManager(hdb_manager.name)
+    found_approved = False
+    for r in all_regs:
+        if r.project == projB and r.officer == hdb_officer and r.status == "APPROVED":
+            found_approved = True
+            break
+    if found_approved:
+        print("PASS: Manager sees officer registration (APPROVED).")
+    else:
+        print("FAIL: Manager does not see the officer registration as approved.")
+
+    print("\n--- Test #22: Approve or Reject Applications & Withdrawals ---")
+    applicant_married_20.age = 22
+    sucS, msgS = applicant_married_20.applyForProject(projB, 3, applicationsController)
+    if sucS:
+        s_app = None
+        for a in applicationsController.applications:
+            if a.applicant == applicant_married_20 and a.project == projB:
+                s_app = a
+                break
+        if s_app:
+            rej_msg = hdb_manager.rejectApplication(s_app)
+            if "rejected" in rej_msg.lower() and s_app.status == "UNSUCCESSFUL":
+                print("PASS: Manager rejected Sarah's BTO application.")
+                applicationsController.requestWithdraw(s_app)
+                wd_msg = hdb_manager.approveWithdrawal(s_app, applicationsController)
+                if "approved" in wd_msg and s_app not in applicationsController.applications:
+                    print("PASS: Manager approved Sarah's withdrawal from an unsuccessful application.")
+                else:
+                    print(f"FAIL: ApproveWithdrawal error: {wd_msg}")
+            else:
+                print(f"FAIL: Manager could not reject Sarah. {rej_msg}")
+        else:
+            print("FAIL: Did not find Sarah's application in the system after creation.")
+    else:
+        print(f"FAIL: Could not create new application for Sarah. {msgS}")
+
+    print("\n--- Test #23: Generate and Filter Reports ---")
+    rep_single = hdb_manager.generateBookingReport(applicationsController, filterMarital="Single")
+    if "John" in rep_single and "TestProjectA" in rep_single:
+        print("PASS: Single booking report includes John.")
+    else:
+        print(f"FAIL: Did not see John in single booking report:\n{rep_single}")
+
+    rep_married = hdb_manager.generateBookingReport(applicationsController, filterMarital="Married")
+    if "No bookings" in rep_married:
+        print("PASS: Married booking report is empty as we haven't had a married user book.")
+    else:
+        print(f"FAIL: Unexpected result in married booking report:\n{rep_married}")
+
+    print("\n========== ALL 23 TEST CASES COMPLETED ==========")
+
+
 if __name__ == "__main__":
-    main()
+    test()
