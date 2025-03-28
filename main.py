@@ -88,8 +88,6 @@ class HDBManager(User):
     def menu(self):
         return [
             "View Projects",
-            "Apply for Projects",
-            "View Application Status",
             "Logout",
         ]
 class Project:
@@ -203,24 +201,32 @@ if __name__ == "__main__":
 
         print(f"Welcome, {currentUser.name} ({UsersController.getUserType(currentUser)})")
 
+        menu = currentUser.menu()
         while currentUser:
-            for i, option in enumerate(currentUser.menu()):
+            for i, option in enumerate(menu):
                 print(f"{i + 1}. {option}")
             choice = input("Enter choice: ")
-            if choice == "1":
+            option = menu[int(choice) - 1]
+            if option == "View Projects":
                 projects = currentUser.getAvailableProjects(projectsController)
                 for project in projects:
                     print(project)
                     print()
-            elif choice == "2":
+            elif option == "Apply for Projects":
                 project_id = input("Enter project ID: ")
                 project = projectsController.projects[int(project_id)]
                 flat_type = input("Enter rooms (2 or 3): ")
                 success, message = currentUser.applyForProject(project, int(flat_type), applicationsController)
                 print(message)
-            elif choice == "3":
-                print("View Application Status")
-            elif choice == "4":
+                print()
+            elif option == "View Application Status":
+                application = currentUser.getOngoingApplications(applicationsController)
+                if application == False:
+                    print("No ongoing applications")
+                else:
+                    print(f"Project: {application.project.projectName}\nFlat Type: {application.flat_type}\nStatus: {application.status}")
+                print()
+            elif option == "Logout":
                 print("Logout")
                 currentUser = None
             else:
