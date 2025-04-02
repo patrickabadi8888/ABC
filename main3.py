@@ -48,8 +48,8 @@ class Applicant(User):
         return applicationsController.applyForProject(self, project, flat_type)
 
     def submitEnquiry(self, project, text, enquiriesController):
-        enquiriesController.createEnquiry(self, project, text)
-        return "Enquiry submitted."
+        success, msg = enquiriesController.createEnquiry(self, project, text)
+        return success, msg
 
     def viewMyEnquiries(self, enquiriesController):
         my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
@@ -64,17 +64,17 @@ class Applicant(User):
         my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
         for i, e in my_enquiries:
             if i == idx:
-                enquiriesController.editEnquiry(e, new_text)
-                return "Enquiry updated."
-        return "Invalid enquiry index."
+                success, msg = enquiriesController.editEnquiry(e, new_text)
+                return success, msg
+        return False, "Invalid enquiry index."
 
     def deleteMyEnquiry(self, enquiriesController, idx):
         my_enquiries = enquiriesController.getEnquiriesByApplicant(self)
         for i, e in my_enquiries:
             if i == idx:
-                enquiriesController.deleteEnquiry(e)
-                return "Enquiry deleted."
-        return "Invalid enquiry index."
+                success, msg = enquiriesController.deleteEnquiry(e)
+                return success, msg
+        return False, "Invalid enquiry index."
 
 class HDBOfficer(Applicant):
     def __init__(self, name, nric, age, maritalStatus, password):
@@ -237,12 +237,24 @@ class ProjectsController:
             ))
 
     def createProject(self, manager, name, neighborhood, n1, p1, n2, p2, od, cd, slot):
-        return Project(name, neighborhood, "2-Room", n1, p1, "3-Room", n2, p2, od, cd, manager.name, slot, [])
+        # Always "2-Room" and "3-Room" for types
+        proj = Project(
+            name, 
+            neighborhood, 
+            "2-Room", n1, p1, 
+            "3-Room", n2, p2, 
+            od, cd, 
+            manager.name, 
+            slot, 
+            []
+        )
+        # We only create it here, but do not block. Return success
+        return True, proj
 
     def editProject(self, manager, project, name=None, neighborhood=None, n1=None, p1=None,
                     n2=None, p2=None, openDate=None, closeDate=None, officerSlot=None):
         if project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if name: project.projectName = name
         if neighborhood: project.neighborhood = neighborhood
         if n1 is not None and n1 >= 0: project.numUnits1 = n1
@@ -252,21 +264,21 @@ class ProjectsController:
         if openDate: project.openingDate = openDate
         if closeDate: project.closingDate = closeDate
         if officerSlot is not None and officerSlot >= 0: project.officerSlot = officerSlot
-        return "Project updated."
+        return True, "Project updated."
 
     def deleteProject(self, manager, project):
         if project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if project in self.projects:
             self.projects.remove(project)
-            return "Project deleted."
-        return "Not found."
+            return True, "Project deleted."
+        return False, "Not found."
 
     def toggleProjectVisibility(self, manager, project):
         if project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         project.visibility = not project.visibility
-        return f"Visibility set to {project.visibility}."
+        return True, f"Visibility set to {project.visibility}."
 
     def viewAllProjects(self):
         msg = "All Projects:\n"
@@ -317,10 +329,10 @@ class ApplicationsController:
         if flat_type not in [2, 3]:
             return False, "Invalid flat type."
         ok, msg = self.verifyApplicationEligibility(applicant, project, flat_type)
-        if ok:
-            self.createApplication(applicant, project, flat_type)
-            return True, "Application successful."
-        return False, msg
+        if not ok:
+            return ok, msg
+        self.createApplication(applicant, project, flat_type)
+        return True, "Application successful."
 
     def createApplication(self, applicant, project, flat_type):
         self.applications.append(Application(applicant, project, flat_type))
@@ -337,12 +349,12 @@ class ApplicationsController:
     def requestBooking(self, applicant, application):
         if application.status == "SUCCESSFUL":
             if application.requestedBooking:
-                return "Booking request already sent."
+                return False, "Booking request already sent."
             application.requestedBooking = True
-            return "Booking request sent."
+            return True, "Booking request sent."
         if application.status == "BOOKED":
-            return "You already booked."
-        return f"Cannot request booking, status is {application.status}."
+            return False, "You already booked."
+        return False, f"Cannot request booking, status is {application.status}."
 
     def bookFlatForApplicant(self, officer, applicant_nric):
         for app in self.applications:
@@ -353,8 +365,8 @@ class ApplicationsController:
                     elif app.flat_type == 3 and app.project.numUnits2 > 0:
                         app.project.numUnits2 -= 1
                     app.status = "BOOKED"
-                    return f"Booked flat for {applicant_nric}."
-        return "Cannot book."
+                    return True, f"Booked flat for {applicant_nric}."
+        return False, "Cannot book."
 
     def generateReceipt(self, officer, applicant_nric):
         for app in self.applications:
@@ -366,8 +378,8 @@ class ApplicationsController:
                 r += f"Marital: {app.applicant.maritalStatus}\n"
                 r += f"Flat Type: {app.flat_type}-Room\n"
                 r += f"Project: {app.project.projectName}, {app.project.neighborhood}\n"
-                return r
-        return "No booking found."
+                return True, r
+        return False, "No booking found."
 
     def viewApplications(self):
         msg = "Applications:\n"
@@ -377,32 +389,32 @@ class ApplicationsController:
 
     def approveApplication(self, manager, application):
         if application.project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if application.status != "PENDING":
-            return "Not pending."
+            return False, "Not pending."
         if (application.flat_type == 2 and application.project.numUnits1 == 0) or \
            (application.flat_type == 3 and application.project.numUnits2 == 0):
-            return "No flats left, cannot approve."
+            return False, "No flats left, cannot approve."
         application.status = "SUCCESSFUL"
-        return "Application approved."
+        return True, "Application approved."
 
     def rejectApplication(self, manager, application):
         if application.project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if application.status != "PENDING":
-            return "Not pending."
+            return False, "Not pending."
         application.status = "UNSUCCESSFUL"
-        return "Application rejected."
+        return True, "Application rejected."
 
     def approveWithdrawal(self, manager, application):
         if application.project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if application not in self.applications:
-            return "Application not found."
+            return False, "Application not found."
         if not application.requestWithdraw:
-            return "No withdrawal request."
+            return False, "No withdrawal request."
         self.applications.remove(application)
-        return "Withdrawal approved."
+        return True, "Withdrawal approved."
 
     def generateBookingReport(self, filterMarital=None):
         booked = [a for a in self.applications if a.status == "BOOKED"]
@@ -427,36 +439,36 @@ class RegistrationsController:
 
     def registerForProject(self, officer, project):
         if project in officer.myProjects:
-            return "Already an officer."
+            return False, "Already an officer."
         if project.manager == officer.name:
-            return "Cannot register for your own project."
+            return False, "Cannot register for your own project."
         reg = Registration(officer, project)
         officer.registrations.append(reg)
         self.registrations.append(reg)
-        return "Officer registration submitted."
+        return True, "Officer registration submitted."
 
     def getAllRegistrationsForManager(self, managerName):
         return [r for r in self.registrations if r.project.manager == managerName]
 
     def approveOfficerRegistration(self, manager, reg):
         if reg.project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if reg.status != "PENDING":
-            return "Not pending."
+            return False, "Not pending."
         if len(reg.project.officers) >= reg.project.officerSlot:
-            return "No officer slot."
+            return False, "No officer slot."
         reg.status = "APPROVED"
         reg.officer.myProjects.append(reg.project)
         reg.project.officers.append(reg.officer.name)
-        return "Officer approved."
+        return True, "Officer approved."
 
     def rejectOfficerRegistration(self, manager, reg):
         if reg.project.manager != manager.name:
-            return "Not your project."
+            return False, "Not your project."
         if reg.status != "PENDING":
-            return "Not pending."
+            return False, "Not pending."
         reg.status = "REJECTED"
-        return "Officer rejected."
+        return True, "Officer rejected."
 
 class Enquiry:
     def __init__(self, applicant, project, text):
@@ -470,26 +482,31 @@ class EnquiriesController:
 
     def createEnquiry(self, applicant, project, text):
         self.enquiries.append(Enquiry(applicant, project, text))
+        return True, "Enquiry submitted."
 
     def getEnquiriesByApplicant(self, applicant):
         return [(i, e) for i, e in enumerate(self.enquiries) if e.applicant == applicant]
 
     def editEnquiry(self, enquiry, new_text):
         enquiry.text = new_text
+        return True, "Enquiry updated."
 
     def deleteEnquiry(self, enquiry):
-        self.enquiries.remove(enquiry)
+        if enquiry in self.enquiries:
+            self.enquiries.remove(enquiry)
+            return True, "Enquiry deleted."
+        return False, "Enquiry not found."
 
     def replyToProjectEnquiry(self, officer, idx, reply_text):
         if not officer.myProjects:
-            return "No handled projects."
+            return False, "No handled projects."
         if idx < 0 or idx >= len(self.enquiries):
-            return "Invalid enquiry index."
+            return False, "Invalid enquiry index."
         e = self.enquiries[idx]
         if e.project in officer.myProjects:
             e.text += f" [Officer Reply: {reply_text}]"
-            return "Reply appended."
-        return "You don't handle this project."
+            return True, "Reply appended."
+        return False, "You don't handle this project."
 
     def viewAllEnquiries(self):
         if not self.enquiries:
@@ -501,10 +518,10 @@ class EnquiriesController:
 
     def replyToEnquiry(self, idx, reply_text):
         if idx < 0 or idx >= len(self.enquiries):
-            return "Invalid index."
+            return False, "Invalid index."
         e = self.enquiries[idx]
         e.text += f" [Manager Reply: {reply_text}]"
-        return "Reply appended."
+        return True, "Reply appended."
 
 class UsersController:
     def __init__(self, applicantCsv, hdbOfficerCsv, hdbManagerCsv):
@@ -594,7 +611,8 @@ def main():
                     if app.status == "SUCCESSFUL":
                         c2 = input("Request booking? (y/n): ")
                         if c2.lower() == 'y':
-                            print(applicationsController.requestBooking(currentUser, app))
+                            suc, msg = applicationsController.requestBooking(currentUser, app)
+                            print(msg)
 
             elif option == "Request Withdrawal":
                 app = applicationsController.getOngoingApplications(currentUser)
@@ -607,7 +625,8 @@ def main():
             elif option == "Submit Enquiry":
                 pid = int(input("Project ID: "))
                 txt = input("Enter enquiry: ")
-                print(currentUser.submitEnquiry(projectsController.projects[pid], txt, enquiriesController))
+                suc, msg = currentUser.submitEnquiry(projectsController.projects[pid], txt, enquiriesController)
+                print(msg)
 
             elif option == "View My Enquiries":
                 print(currentUser.viewMyEnquiries(enquiriesController))
@@ -615,15 +634,18 @@ def main():
             elif option == "Edit My Enquiry":
                 idx = int(input("Enquiry index: "))
                 new_txt = input("New text: ")
-                print(currentUser.editMyEnquiry(enquiriesController, idx, new_txt))
+                suc, msg = currentUser.editMyEnquiry(enquiriesController, idx, new_txt)
+                print(msg)
 
             elif option == "Delete My Enquiry":
                 idx = int(input("Enquiry index: "))
-                print(currentUser.deleteMyEnquiry(enquiriesController, idx))
+                suc, msg = currentUser.deleteMyEnquiry(enquiriesController, idx)
+                print(msg)
 
             elif option == "Register for Project as Officer":
                 pid = int(input("Project ID: "))
-                print(currentUser.registerForProject(projectsController.projects[pid], registrationsController))
+                suc, msg = currentUser.registerForProject(projectsController.projects[pid], registrationsController)
+                print(msg)
 
             elif option == "View My Officer Registrations":
                 print(currentUser.viewOfficerRegistrations())
@@ -631,15 +653,18 @@ def main():
             elif option == "Reply to Project Enquiry (Handled Project)":
                 idx = int(input("Enquiry index: "))
                 rep = input("Reply text: ")
-                print(currentUser.replyEnquiry(idx, rep, enquiriesController))
+                suc, msg = currentUser.replyEnquiry(idx, rep, enquiriesController)
+                print(msg)
 
             elif option == "Book a Flat for Applicant (Handled Project)":
                 anric = input("Enter applicant NRIC: ")
-                print(currentUser.bookFlatForApplicant(anric, applicationsController))
+                suc, msg = currentUser.bookFlatForApplicant(anric, applicationsController)
+                print(msg)
 
             elif option == "Generate Booking Receipt":
                 anric = input("Enter applicant NRIC: ")
-                print(currentUser.generateReceipt(anric, applicationsController))
+                suc, msg = currentUser.generateReceipt(anric, applicationsController)
+                print(msg)
 
             elif option == "Create Project":
                 name = input("Name: ")
@@ -664,7 +689,7 @@ def main():
                                 managerHasOverlap = True
                                 break
                     if not managerHasOverlap:
-                        proj = currentUser.createProject(
+                        suc, proj_or_msg = currentUser.createProject(
                             name, 
                             neigh,
                             n1, p1, 
@@ -673,8 +698,12 @@ def main():
                             slot, 
                             projectsController
                         )
-                        projectsController.projects.append(proj)
-                        print("Project created.")
+                        if suc:
+                            # If creation is successful, proj_or_msg is the new Project object
+                            projectsController.projects.append(proj_or_msg)
+                            print("Project created.")
+                        else:
+                            print(proj_or_msg)
                 except ValueError:
                     print("Invalid date format. Project not created.")
 
@@ -731,7 +760,7 @@ def main():
                     print("Date parsing error. Edit aborted.")
                     continue
 
-                msg = currentUser.editProject(
+                suc, msg = currentUser.editProject(
                     p,
                     name=(new_name if new_name.strip() else None),
                     neighborhood=(new_neigh if new_neigh.strip() else None),
@@ -752,7 +781,8 @@ def main():
                     print("Invalid project ID.")
                     continue
                 p = projectsController.projects[pid]
-                print(currentUser.deleteProject(p, projectsController))
+                suc, msg = currentUser.deleteProject(p, projectsController)
+                print(msg)
 
             elif option == "Toggle Project Visibility":
                 pid = int(input("Project ID: "))
@@ -760,7 +790,8 @@ def main():
                     print("Invalid project ID.")
                     continue
                 p = projectsController.projects[pid]
-                print(currentUser.toggleProjectVisibility(p, projectsController))
+                suc, msg = currentUser.toggleProjectVisibility(p, projectsController)
+                print(msg)
 
             elif option == "View All Projects":
                 print(currentUser.viewAllProjects(projectsController))
@@ -775,7 +806,8 @@ def main():
                 i = int(input("Index: "))
                 regs = registrationsController.getAllRegistrationsForManager(currentUser.name)
                 if 0 <= i < len(regs):
-                    print(currentUser.approveOfficerRegistration(regs[i], registrationsController))
+                    suc, msg = currentUser.approveOfficerRegistration(regs[i], registrationsController)
+                    print(msg)
                 else:
                     print("Invalid index.")
 
@@ -783,7 +815,8 @@ def main():
                 i = int(input("Index: "))
                 regs = registrationsController.getAllRegistrationsForManager(currentUser.name)
                 if 0 <= i < len(regs):
-                    print(currentUser.rejectOfficerRegistration(regs[i], registrationsController))
+                    suc, msg = currentUser.rejectOfficerRegistration(regs[i], registrationsController)
+                    print(msg)
                 else:
                     print("Invalid index.")
 
@@ -793,21 +826,24 @@ def main():
             elif option == "Approve Application":
                 i = int(input("Application index: "))
                 if 0 <= i < len(applicationsController.applications):
-                    print(currentUser.approveApplication(applicationsController.applications[i], applicationsController))
+                    suc, msg = currentUser.approveApplication(applicationsController.applications[i], applicationsController)
+                    print(msg)
                 else:
                     print("Invalid index.")
 
             elif option == "Reject Application":
                 i = int(input("Application index: "))
                 if 0 <= i < len(applicationsController.applications):
-                    print(currentUser.rejectApplication(applicationsController.applications[i], applicationsController))
+                    suc, msg = currentUser.rejectApplication(applicationsController.applications[i], applicationsController)
+                    print(msg)
                 else:
                     print("Invalid index.")
 
             elif option == "Approve Withdrawal":
                 i = int(input("Application index: "))
                 if 0 <= i < len(applicationsController.applications):
-                    print(currentUser.approveWithdrawal(applicationsController.applications[i], applicationsController))
+                    suc, msg = currentUser.approveWithdrawal(applicationsController.applications[i], applicationsController)
+                    print(msg)
                 else:
                     print("Invalid index.")
 
@@ -823,7 +859,8 @@ def main():
             elif option == "Reply to Enquiry":
                 idx = int(input("Enquiry index: "))
                 rep = input("Reply text: ")
-                print(currentUser.replyToEnquiry(idx, rep, enquiriesController))
+                suc, msg = currentUser.replyToEnquiry(idx, rep, enquiriesController)
+                print(msg)
 
             elif option == "Change Password":
                 old_pwd = input("Enter your old password: ")
