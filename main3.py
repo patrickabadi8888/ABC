@@ -135,12 +135,12 @@ class HDBManager(User):
             "Logout"
         ]
 
-    def createProject(self, name, neighborhood, t1, n1, p1, t2, n2, p2, od, cd, slot, projectsController):
-        return projectsController.createProject(self, name, neighborhood, t1, n1, p1, t2, n2, p2, od, cd, slot)
+    def createProject(self, name, neighborhood, n1, p1, n2, p2, od, cd, slot, projectsController):
+        return projectsController.createProject(self, name, neighborhood, n1, p1, n2, p2, od, cd, slot)
 
-    def editProject(self, project, name, neighborhood, t1, n1, p1, t2, n2, p2, openDate, closeDate, officerSlot, projectsController):
+    def editProject(self, project, name, neighborhood, n1, p1, n2, p2, openDate, closeDate, officerSlot, projectsController):
         return projectsController.editProject(
-            self, project, name, neighborhood, t1, n1, p1, t2, n2, p2, openDate, closeDate, officerSlot
+            self, project, name, neighborhood, n1, p1, n2, p2, openDate, closeDate, officerSlot
         )
 
     def deleteProject(self, project, projectsController):
@@ -236,19 +236,17 @@ class ProjectsController:
                 parts[10], parts[11], officer_list
             ))
 
-    def createProject(self, manager, name, neighborhood, t1, n1, p1, t2, n2, p2, od, cd, slot):
-        return Project(name, neighborhood, t1, n1, p1, t2, n2, p2, od, cd, manager.name, slot, [])
+    def createProject(self, manager, name, neighborhood, n1, p1, n2, p2, od, cd, slot):
+        return Project(name, neighborhood, "2-Room", n1, p1, "3-Room", n2, p2, od, cd, manager.name, slot, [])
 
-    def editProject(self, manager, project, name=None, neighborhood=None, t1=None, n1=None, p1=None,
-                    t2=None, n2=None, p2=None, openDate=None, closeDate=None, officerSlot=None):
+    def editProject(self, manager, project, name=None, neighborhood=None, n1=None, p1=None,
+                    n2=None, p2=None, openDate=None, closeDate=None, officerSlot=None):
         if project.manager != manager.name:
             return "Not your project."
         if name: project.projectName = name
         if neighborhood: project.neighborhood = neighborhood
-        if t1: project.type1 = t1
         if n1 is not None and n1 >= 0: project.numUnits1 = n1
         if p1 is not None and p1 >= 0: project.price1 = p1
-        if t2: project.type2 = t2
         if n2 is not None and n2 >= 0: project.numUnits2 = n2
         if p2 is not None and p2 >= 0: project.price2 = p2
         if openDate: project.openingDate = openDate
@@ -539,7 +537,6 @@ class UsersController:
             HDBOfficer: "HDB Officer",
             HDBManager: "HDB Manager",
         }
-        # Specific check order so that a Manager won't be wrongly identified as an Officer
         if isinstance(user, HDBManager):
             return from_types[HDBManager]
         elif isinstance(user, HDBOfficer):
@@ -647,12 +644,10 @@ def main():
             elif option == "Create Project":
                 name = input("Name: ")
                 neigh = input("Neighborhood: ")
-                t1 = input("Type1 label (e.g. 2-Room): ")
-                n1 = int(input("Num type1: "))
-                p1 = int(input("Price type1: "))
-                t2 = input("Type2 label (e.g. 3-Room): ")
-                n2 = int(input("Num type2: "))
-                p2 = int(input("Price type2: "))
+                n1 = int(input("Num of 2-Room units: "))
+                p1 = int(input("Price for 2-Room: "))
+                n2 = int(input("Num of 3-Room units: "))
+                p2 = int(input("Price for 3-Room: "))
                 od = input("Open date (yyyy-mm-dd): ")
                 cd = input("Close date (yyyy-mm-dd): ")
                 slot = int(input("Officer slots: "))
@@ -670,7 +665,12 @@ def main():
                                 break
                     if not managerHasOverlap:
                         proj = currentUser.createProject(
-                            name, neigh, t1, n1, p1, t2, n2, p2, od, cd, slot, 
+                            name, 
+                            neigh,
+                            n1, p1, 
+                            n2, p2, 
+                            od, cd, 
+                            slot, 
                             projectsController
                         )
                         projectsController.projects.append(proj)
@@ -686,20 +686,20 @@ def main():
                 p = projectsController.projects[pid]
                 new_name = input("Name or blank: ")
                 new_neigh = input("Neighborhood or blank: ")
-                new_t1 = input("Type1 label or blank: ")
-                new_n1 = input("Num type1 or -1: ")
-                new_p1 = input("Price type1 or -1: ")
-                new_t2 = input("Type2 label or blank: ")
-                new_n2 = input("Num type2 or -1: ")
-                new_p2 = input("Price type2 or -1: ")
+                new_n1 = input("Num of 2-Room units or -1: ")
+                new_p1 = input("Price for 2-Room or -1: ")
+                new_n2 = input("Num of 3-Room units or -1: ")
+                new_p2 = input("Price for 3-Room or -1: ")
                 new_od = input("Open date or blank (yyyy-mm-dd): ")
                 new_cd = input("Close date or blank (yyyy-mm-dd): ")
                 new_slots = input("Slots or -1: ")
+
                 new_n1 = None if not new_n1.isdigit() else int(new_n1)
                 new_p1 = None if not new_p1.isdigit() else int(new_p1)
                 new_n2 = None if not new_n2.isdigit() else int(new_n2)
                 new_p2 = None if not new_p2.isdigit() else int(new_p2)
                 new_slots = None if not new_slots.isdigit() else int(new_slots)
+
                 final_od = p.openingDate
                 final_cd = p.closingDate
                 try:
@@ -712,6 +712,7 @@ def main():
                 except ValueError:
                     print("Invalid date format. Project not edited.")
                     continue
+
                 try:
                     od_date_obj = datetime.strptime(final_od, "%Y-%m-%d")
                     cd_date_obj = datetime.strptime(final_cd, "%Y-%m-%d")
@@ -729,14 +730,13 @@ def main():
                 except:
                     print("Date parsing error. Edit aborted.")
                     continue
+
                 msg = currentUser.editProject(
                     p,
                     name=(new_name if new_name.strip() else None),
                     neighborhood=(new_neigh if new_neigh.strip() else None),
-                    t1=(new_t1 if new_t1.strip() else None),
                     n1=new_n1,
                     p1=new_p1,
-                    t2=(new_t2 if new_t2.strip() else None),
                     n2=new_n2,
                     p2=new_p2,
                     openDate=(new_od if new_od.strip() else None),
