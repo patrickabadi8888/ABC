@@ -25,8 +25,6 @@ class User:
         self.password = password
 
     def __eq__(self, other):
-        if not isinstance(other, User):
-            return NotImplemented
         return self.nric == other.nric
 
     def __hash__(self):
@@ -230,18 +228,6 @@ class BaseRepository:
         self.required_headers = required_headers
         self.data = {}
         self._load_data()
-
-    def _get_key(self, item):
-        """Determines the key for storing the item in self.data. Must be overridden."""
-        raise NotImplementedError
-
-    def _create_instance(self, row):
-        """Creates a model instance from a CSV row. Must be overridden."""
-        raise NotImplementedError
-
-    def _get_row_data(self, item):
-        """Converts a model instance back to a list for CSV writing. Must be overridden."""
-        raise NotImplementedError
 
     def _ensure_file_exists(self):
         if not os.path.exists(self.csv_file):
