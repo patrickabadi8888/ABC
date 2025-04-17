@@ -127,8 +127,6 @@ class Enquiry:
     def is_replied(self):
         return bool(self.reply)
 
-from datetime import datetime, date
-
 DATE_FORMAT = "%Y-%m-%d"
 
 def parse_date(date_str):
@@ -399,6 +397,7 @@ class ProjectRepository(BaseRepository):
             'Selling price for Type 2', 'Application opening date',
             'Application closing date', 'Manager', 'Officer Slot', 'Officer', 'Visibility'
          ]
+         self._data_list = []
          super().__init__(csv_file, Project, headers)
 
     def _get_key(self, item):
@@ -535,8 +534,6 @@ class ApplicationRepository(BaseRepository):
         if len(self._data_list) == original_len:
             raise IntegrityError(f"Application for {applicant_nric} on {project_name} not found for deletion.")
         self.save_data()
-
-
 class RegistrationRepository(BaseRepository):
     def __init__(self, csv_file=REGISTRATION_CSV):
         headers = ['OfficerNRIC', 'ProjectName', 'Status']
@@ -878,7 +875,7 @@ class ProjectService:
 
         try:
             if project.project_name != original_name:
-                 self.project_repository.delete(original_name)
+                 self.project_repository.delete_by_name(original_name)
                  self.project_repository.add(project)
             else:
                  self.project_repository.update(project)
