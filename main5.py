@@ -769,6 +769,10 @@ class ProjectService:
             if not can_view_any_flat:
                 continue
 
+            if project.num_units1 == 0 and not can_view_any_flat:
+                continue
+            if project.num_units2 == 0 and project.num_units2 == 0:
+                continue
             viewable.append(project)
 
         return sorted(list({p.project_name: p for p in viewable}.values()), key=lambda p: p.project_name)

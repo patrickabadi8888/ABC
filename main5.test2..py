@@ -1,4 +1,3 @@
-# main5.test.py
 import unittest
 import os
 import csv
@@ -8,10 +7,9 @@ from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
 
 # Import everything from the main script
-# Assuming main5.py is in the same directory or accessible via PYTHONPATH
-from main5 import *
+from main5 import * # Assuming main5.py is accessible
 
-# --- Constants for Test Data ---
+# --- Constants remain the same ---
 TEST_APPLICANT_NRIC = "S1234567A"
 TEST_APPLICANT_PWD = "password"
 TEST_OFFICER_NRIC = "S7654321B"
@@ -41,6 +39,7 @@ OVERLAP2_CLOSE = TODAY + timedelta(days=22)
 NON_OVERLAP_OPEN = TODAY + timedelta(days=30)
 NON_OVERLAP_CLOSE = TODAY + timedelta(days=40)
 
+
 # --- Helper Functions for Test Setup ---
 
 def create_csv(filepath, headers, data_rows):
@@ -63,63 +62,64 @@ def setup_initial_csvs(temp_dir):
         'ENQUIRY_CSV': os.path.join(temp_dir, 'EnquiryData.csv'),
     }
 
-    # Applicant Data
-    create_csv(paths['APPLICANT_CSV'],
-               ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
-               [
-                   ['Test Applicant', TEST_APPLICANT_NRIC, '36', 'Single', TEST_APPLICANT_PWD],
-                   ['Young Applicant', 'S2345678F', '25', 'Single', 'password'],
-                   ['Married Applicant', 'S3456789G', '22', 'Married', 'password'],
-                   ['Old Married', 'S1122334H', '40', 'Married', 'password'],
-               ])
+    # --- Define the initial data structure ---
+    initial_data = {
+        paths['APPLICANT_CSV']: {
+            'headers': ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
+            'rows': [
+                ['Test Applicant', TEST_APPLICANT_NRIC, '36', 'Single', TEST_APPLICANT_PWD],
+                ['Young Applicant', 'S2345678F', '25', 'Single', 'password'],
+                ['Married Applicant', 'S3456789G', '22', 'Married', 'password'],
+                ['Old Married', 'S1122334H', '40', 'Married', 'password'],
+            ]
+        },
+        paths['OFFICER_CSV']: {
+            'headers': ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
+            'rows': [
+                ['Test Officer', TEST_OFFICER_NRIC, '30', 'Married', TEST_OFFICER_PWD],
+                ['Test Officer 2', TEST_OFFICER2_NRIC, '32', 'Single', TEST_OFFICER2_PWD],
+            ]
+        },
+        paths['MANAGER_CSV']: {
+            'headers': ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
+            'rows': [
+                ['Test Manager', TEST_MANAGER_NRIC, '45', 'Married', TEST_MANAGER_PWD],
+                ['Test Manager 2', TEST_MANAGER2_NRIC, '46', 'Married', TEST_MANAGER2_PWD],
+            ]
+        },
+        paths['PROJECT_CSV']: {
+            'headers': [ 'Project Name', 'Neighborhood', 'Type 1', 'Number of units for Type 1',
+                         'Selling price for Type 1', 'Type 2', 'Number of units for Type 2',
+                         'Selling price for Type 2', 'Application opening date',
+                         'Application closing date', 'Manager', 'Officer Slot', 'Officer', 'Visibility'],
+            'rows': [
+                 [TEST_PROJECT1_NAME, 'Yishun', '2-Room', '10', '100000', '3-Room', '5', '200000',
+                  format_date(TODAY), format_date(FUTURE_CLOSE), TEST_MANAGER_NRIC, '2', '', 'True'],
+                 [TEST_PROJECT2_NAME, 'Boon Lay', '2-Room', '8', '90000', '3-Room', '12', '180000',
+                  format_date(FUTURE_OPEN), format_date(FUTURE_CLOSE + timedelta(days=10)), TEST_MANAGER_NRIC, '3', '', 'False'], # Future & Invisible
+                 [TEST_PROJECT3_NAME, 'Tampines', '2-Room', '0', '80000', '3-Room', '0', '170000',
+                  format_date(PAST_OPEN), format_date(PAST_CLOSE), TEST_MANAGER2_NRIC, '1', '', 'True'], # Past
+            ]
+        },
+        paths['APPLICATION_CSV']: {
+            'headers': ['ApplicantNRIC', 'ProjectName', 'FlatType', 'Status', 'RequestWithdrawal'],
+            'rows': []
+        },
+        paths['REGISTRATION_CSV']: {
+            'headers': ['OfficerNRIC', 'ProjectName', 'Status'],
+            'rows': []
+        },
+        paths['ENQUIRY_CSV']: {
+            'headers': ['EnquiryID', 'ApplicantNRIC', 'ProjectName', 'Text', 'Reply'],
+            'rows': []
+        }
+    }
 
-    # Officer Data
-    create_csv(paths['OFFICER_CSV'],
-               ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
-               [
-                   ['Test Officer', TEST_OFFICER_NRIC, '30', 'Married', TEST_OFFICER_PWD],
-                   ['Test Officer 2', TEST_OFFICER2_NRIC, '32', 'Single', TEST_OFFICER2_PWD],
-               ])
+    # --- Create the files ---
+    for path, content in initial_data.items():
+        create_csv(path, content['headers'], content['rows'])
 
-    # Manager Data
-    create_csv(paths['MANAGER_CSV'],
-               ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'],
-               [
-                   ['Test Manager', TEST_MANAGER_NRIC, '45', 'Married', TEST_MANAGER_PWD],
-                   ['Test Manager 2', TEST_MANAGER2_NRIC, '46', 'Married', TEST_MANAGER2_PWD],
-                ])
-
-    # Project Data (Start with one active, one inactive, one past)
-    create_csv(paths['PROJECT_CSV'],
-               [ 'Project Name', 'Neighborhood', 'Type 1', 'Number of units for Type 1',
-                 'Selling price for Type 1', 'Type 2', 'Number of units for Type 2',
-                 'Selling price for Type 2', 'Application opening date',
-                 'Application closing date', 'Manager', 'Officer Slot', 'Officer', 'Visibility'],
-                [
-                    [TEST_PROJECT1_NAME, 'Yishun', '2-Room', '10', '100000', '3-Room', '5', '200000',
-                     format_date(TODAY), format_date(FUTURE_CLOSE), TEST_MANAGER_NRIC, '2', '', 'True'],
-                    [TEST_PROJECT2_NAME, 'Boon Lay', '2-Room', '8', '90000', '3-Room', '12', '180000',
-                     format_date(FUTURE_OPEN), format_date(FUTURE_CLOSE + timedelta(days=10)), TEST_MANAGER_NRIC, '3', '', 'False'], # Future & Invisible
-                    [TEST_PROJECT3_NAME, 'Tampines', '2-Room', '0', '80000', '3-Room', '0', '170000',
-                     format_date(PAST_OPEN), format_date(PAST_CLOSE), TEST_MANAGER2_NRIC, '1', '', 'True'], # Past
-                ])
-
-    # Application Data (Start empty)
-    create_csv(paths['APPLICATION_CSV'],
-               ['ApplicantNRIC', 'ProjectName', 'FlatType', 'Status', 'RequestWithdrawal'],
-               [])
-
-    # Registration Data (Start empty)
-    create_csv(paths['REGISTRATION_CSV'],
-               ['OfficerNRIC', 'ProjectName', 'Status'],
-               [])
-
-    # Enquiry Data (Start empty)
-    create_csv(paths['ENQUIRY_CSV'],
-                ['EnquiryID', 'ApplicantNRIC', 'ProjectName', 'Text', 'Reply'],
-                [])
-
-    return paths
+    return paths # Return the paths for patching
 
 # --- Base Test Class for Setup/Teardown ---
 
@@ -127,6 +127,8 @@ class BaseBTOIntegrationTest(unittest.TestCase):
     temp_dir = None
     original_paths = {}
     patched_paths = {}
+    patchers = []
+    controller = None # Class attribute for controller if needed
 
     @classmethod
     def setUpClass(cls):
@@ -140,35 +142,48 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             'REGISTRATION_CSV': REGISTRATION_CSV, 'ENQUIRY_CSV': ENQUIRY_CSV
         }
 
-        # Create and get paths for temp CSVs
-        cls.patched_paths = setup_initial_csvs(cls.temp_dir)
+        # Generate the paths for the temp files
+        # We don't create the files here anymore, setUp will do it
+        cls.patched_paths = {
+            'APPLICANT_CSV': os.path.join(cls.temp_dir, 'ApplicantList.csv'),
+            'OFFICER_CSV': os.path.join(cls.temp_dir, 'OfficerList.csv'),
+            'MANAGER_CSV': os.path.join(cls.temp_dir, 'ManagerList.csv'),
+            'PROJECT_CSV': os.path.join(cls.temp_dir, 'ProjectList.csv'),
+            'APPLICATION_CSV': os.path.join(cls.temp_dir, 'ApplicationData.csv'),
+            'REGISTRATION_CSV': os.path.join(cls.temp_dir, 'RegistrationData.csv'),
+            'ENQUIRY_CSV': os.path.join(cls.temp_dir, 'EnquiryData.csv'),
+        }
 
         # Patch the global constants IN THE CONTEXT OF THE IMPORTED MODULE (main5)
-        cls.patchers = []
+        # This only needs to be done once per class
         for key, temp_path in cls.patched_paths.items():
-            patcher = patch(f'main5.{key}', temp_path)
-            cls.patchers.append(patcher)
-            patcher.start()
+            # Ensure patcher isn't already active if tests are run oddly
+            try:
+                 patcher = patch(f'main5.{key}', temp_path)
+                 cls.patchers.append(patcher)
+                 patcher.start()
+            except Exception as e:
+                 print(f"Warning: Could not patch {key}: {e}") # Handle potential issues if run multiple times in same process without teardown
 
-        # Initialize services AFTER patching paths
-        cls.user_repo = UserRepository()
-        cls.project_repo = ProjectRepository()
-        cls.app_repo = ApplicationRepository()
-        cls.reg_repo = RegistrationRepository()
-        cls.enq_repo = EnquiryRepository() # Re-init to get correct next_id
-
-        cls.project_service = ProjectService(cls.project_repo, cls.reg_repo)
-        cls.reg_service = RegistrationService(cls.reg_repo, cls.project_service, cls.app_repo)
-        cls.app_service = ApplicationService(cls.app_repo, cls.project_service, cls.reg_service)
-        cls.enq_service = EnquiryService(cls.enq_repo, cls.project_service, cls.reg_service, cls.user_repo)
-        cls.auth_service = AuthService(cls.user_repo)
+        # Initialize controller AFTER patching paths (only once)
+        try:
+            cls.controller = ApplicationController()
+        except Exception as e:
+            print(f"CRITICAL: Failed to initialize controller in setUpClass: {e}")
+            # Depending on severity, you might want to raise an exception
+            # or ensure tests relying on controller handle its potential None state.
+            cls.controller = None
 
 
     @classmethod
     def tearDownClass(cls):
         # Stop patchers
         for patcher in cls.patchers:
-            patcher.stop()
+            try:
+                patcher.stop()
+            except Exception as e:
+                print(f"Warning: Could not stop patcher: {e}")
+        cls.patchers = [] # Clear list
 
         # Remove temporary directory
         if cls.temp_dir and os.path.exists(cls.temp_dir):
@@ -177,19 +192,20 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         cls.temp_dir = None
 
     def setUp(self):
-        """ Reset data between tests by reloading from initial files """
-        # It might be faster to just re-initialize repositories if load is quick
-        # Or, re-copy initial files if tests modify them heavily
-        # For simplicity here, we'll re-initialize the repositories
-        # This assumes BaseRepository._load_data() correctly re-reads the patched files
+        """ Reset data state and re-initialize services for EACH test """
         try:
-            # print(f"Setting up test: {self.id()}") # Uncomment for debugging test order/setup
+            # 1. Recreate the initial CSV files in the temp directory
+            # This ensures each test starts with the EXACT same data state
+            setup_initial_csvs(self.temp_dir)
+
+            # 2. Re-initialize repositories and services to read the fresh data
+            # Important: Pass the patched paths explicitly if constructors use them directly
+            # Or rely on the patching if constructors read the global variables
             self.user_repo = UserRepository()
-            self.project_repo = ProjectRepository(csv_file=self.patched_paths['PROJECT_CSV'])
-            self.app_repo = ApplicationRepository(csv_file=self.patched_paths['APPLICATION_CSV'])
-            self.reg_repo = RegistrationRepository(csv_file=self.patched_paths['REGISTRATION_CSV'])
-            # Re-init EnquiryRepo to reset next_id based on current file state
-            self.enq_repo = EnquiryRepository(csv_file=self.patched_paths['ENQUIRY_CSV'])
+            self.project_repo = ProjectRepository() # Assumes constructor uses patched global
+            self.app_repo = ApplicationRepository()
+            self.reg_repo = RegistrationRepository()
+            self.enq_repo = EnquiryRepository() # Re-init to get correct next_id
 
             self.project_service = ProjectService(self.project_repo, self.reg_repo)
             self.reg_service = RegistrationService(self.reg_repo, self.project_service, self.app_repo)
@@ -197,7 +213,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             self.enq_service = EnquiryService(self.enq_repo, self.project_service, self.reg_service, self.user_repo)
             self.auth_service = AuthService(self.user_repo)
 
-            # Find users for convenience in tests
+            # 3. Re-find users/projects for convenience in tests
             self.applicant = self.user_repo.find_user_by_nric(TEST_APPLICANT_NRIC)
             self.officer = self.user_repo.find_user_by_nric(TEST_OFFICER_NRIC)
             self.officer2 = self.user_repo.find_user_by_nric(TEST_OFFICER2_NRIC)
@@ -207,16 +223,24 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             self.married_applicant = self.user_repo.find_user_by_nric("S3456789G")
             self.old_married_applicant = self.user_repo.find_user_by_nric("S1122334H")
 
-            # Find projects for convenience
             self.project1 = self.project_service.find_project_by_name(TEST_PROJECT1_NAME)
             self.project2 = self.project_service.find_project_by_name(TEST_PROJECT2_NAME)
             self.project3 = self.project_service.find_project_by_name(TEST_PROJECT3_NAME)
+
+            # Check if essential objects were loaded, fail fast if not
+            self.assertIsNotNone(self.applicant, "Setup failed: Applicant not loaded")
+            self.assertIsNotNone(self.officer, "Setup failed: Officer not loaded")
+            self.assertIsNotNone(self.manager, "Setup failed: Manager not loaded")
+            self.assertIsNotNone(self.project1, "Setup failed: Project1 not loaded")
+            # Add checks for other essential objects if needed
+
         except Exception as e:
              # If setup fails, make sure the test fails clearly
-             self.fail(f"Test setUp failed: {e}")
+             self.fail(f"Test setUp failed: {e}\nTraceback: {traceback.format_exc()}")
 
-    # --- Test Cases ---
 
+    # --- Test Cases (Keep the existing test methods) ---
+    # ... (all your test_... methods go here) ...
     # --- Authentication Tests ---
     def test_login_success(self):
         user = self.auth_service.login(TEST_APPLICANT_NRIC, TEST_APPLICANT_PWD)
@@ -262,8 +286,11 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.assertTrue(self.project1.is_currently_active()) # Visible, date range includes today
         self.assertFalse(self.project2.is_currently_active()) # Invisible
         self.project2.visibility = True # Make visible
+        self.project_repo.update(self.project2) # Save visibility change
+        self.project2 = self.project_service.find_project_by_name(TEST_PROJECT2_NAME) # Re-fetch
         self.assertFalse(self.project2.is_currently_active()) # Still false, future date
         self.project2.visibility = False # Reset
+        self.project_repo.update(self.project2) # Save reset
         self.assertFalse(self.project3.is_currently_active()) # Past date
 
     def test_get_flat_details(self):
@@ -290,20 +317,15 @@ class BaseBTOIntegrationTest(unittest.TestCase):
     def test_can_add_officer(self):
         self.assertTrue(self.project1.can_add_officer()) # Slot 2, 0 assigned
         self.project1.officer_nrics.append("S111")
+        # Note: Modifying list directly doesn't trigger save, but tests can_add logic
         self.assertTrue(self.project1.can_add_officer()) # Slot 2, 1 assigned
         self.project1.officer_nrics.append("S222")
         self.assertFalse(self.project1.can_add_officer()) # Slot 2, 2 assigned
+        # Reset for other tests if needed, though setUp handles this now
+        self.project1.officer_nrics = []
 
     # --- Applicant Flow Tests ---
     def test_applicant_view_projects_eligibility(self):
-        # Young single (<35) - cannot view any project based on age/marital alone
-        # But project1 is active, they meet the age/marital status for 2-room, so should see project1
-        # Note: Original requirement implies view filtering first, then flat eligibility inside apply
-        # Revised interpretation: Viewable if *potentially* eligible for *any* flat type in an active project
-        # Simplified eligibility for viewing: Just check if project is active and visible
-        # More strict interpretation (based on FAQ Q2 for Single): Hide 3-room details
-        # The current `get_viewable_projects_for_applicant` implements a mix. Let's test that logic.
-
         # Test Applicant (Single, 36) - Can view active/visible Project 1
         viewable = self.project_service.get_viewable_projects_for_applicant(self.applicant)
         self.assertIn(self.project1, viewable)
@@ -350,7 +372,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.married_applicant.age = 20
         with self.assertRaisesRegex(OperationError, "Married applicants must be at least 21 years old"):
             self.app_service.apply_for_project(self.married_applicant, self.project1, 2)
-        self.married_applicant.age = original_age # Restore age
+        self.married_applicant.age = original_age # Restore age - though setUp resets anyway
 
     def test_applicant_apply_fail_single_underage(self):
         # Young Applicant (Single, 25) tries to apply
@@ -387,8 +409,10 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         app = self.app_service.apply_for_project(self.applicant, self.project1, 2)
         # View
         found_app = self.app_service.find_application_by_applicant(self.applicant.nric)
+        self.assertIsNotNone(found_app) # Check it's not None first
         self.assertEqual(app.applicant_nric, found_app.applicant_nric)
         self.assertEqual(app.project_name, found_app.project_name)
+
 
     def test_applicant_request_withdrawal_pending(self):
         app = self.app_service.apply_for_project(self.applicant, self.project1, 2)
@@ -418,6 +442,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         enq = self.enq_service.submit_enquiry(self.applicant, self.project1, "Test enquiry text?")
         self.assertIsNotNone(enq)
         self.assertGreater(enq.enquiry_id, 0)
+        initial_id = enq.enquiry_id
         self.assertEqual(enq.applicant_nric, self.applicant.nric)
         self.assertEqual(enq.project_name, self.project1.project_name)
         self.assertEqual(enq.text, "Test enquiry text?")
@@ -438,6 +463,11 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         deleted_enq = self.enq_service.find_enquiry_by_id(enq.enquiry_id)
         self.assertIsNone(deleted_enq)
 
+        # Check next ID increments correctly after deletion
+        enq2 = self.enq_service.submit_enquiry(self.applicant, self.project1, "Another Q")
+        self.assertEqual(enq2.enquiry_id, initial_id + 1)
+
+
     def test_applicant_enquiry_fail_edit_delete_replied(self):
         enq = self.enq_service.submit_enquiry(self.applicant, self.project1, "Enquiry to be replied")
         # Manager replies
@@ -455,6 +485,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
     # --- Officer Flow Tests ---
     def test_officer_register_project_success(self):
         # Officer registers for Project 3 (managed by Manager 2)
+        # Project 3 has past dates, but registration check doesn't care about project dates
         reg = self.reg_service.officer_register_for_project(self.officer, self.project3)
         self.assertIsInstance(reg, Registration)
         self.assertEqual(reg.officer_nric, self.officer.nric)
@@ -463,6 +494,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         # Verify registration exists
         found_reg = self.reg_service.find_registration(self.officer.nric, self.project3.project_name)
         self.assertIsNotNone(found_reg)
+
 
     def test_officer_register_fail_already_registered(self):
         self.reg_service.officer_register_for_project(self.officer, self.project3)
@@ -483,26 +515,28 @@ class BaseBTOIntegrationTest(unittest.TestCase):
 
     def test_officer_register_fail_overlap_approved(self):
         # 1. Create two overlapping projects managed by different managers
-        proj_overlap1 = self.project_service.create_project(self.manager, "Overlap A", "Area A", 5, 1, 5, 1, OVERLAP1_OPEN, OVERLAP1_CLOSE, 2)
-        proj_overlap2 = self.project_service.create_project(self.manager2, "Overlap B", "Area B", 5, 1, 5, 1, OVERLAP2_OPEN, OVERLAP2_CLOSE, 2)
+        # Need to use manager2 for one to avoid manager1 overlap check during creation
+        proj_overlap1 = self.project_service.create_project(self.manager2, "Overlap A", "Area A", 5, 1, 5, 1, OVERLAP1_OPEN, OVERLAP1_CLOSE, 2)
+        proj_overlap2 = self.project_service.create_project(self.manager, "Overlap B", "Area B", 5, 1, 5, 1, OVERLAP2_OPEN, OVERLAP2_CLOSE, 2)
 
         # 2. Officer registers for first project
         reg1 = self.reg_service.officer_register_for_project(self.officer, proj_overlap1)
         # 3. Manager approves registration
-        self.reg_service.manager_approve_officer_registration(self.manager, reg1)
+        self.reg_service.manager_approve_officer_registration(self.manager2, reg1)
 
         # 4. Officer tries to register for second (overlapping) project
         with self.assertRaisesRegex(OperationError, "already an approved officer for another project.*overlapping application period"):
             self.reg_service.officer_register_for_project(self.officer, proj_overlap2)
 
+
     def test_officer_apply_fail_is_approved_officer_for_project(self):
-        # 1. Officer registers for Project 3
-        reg = self.reg_service.officer_register_for_project(self.officer, self.project3)
-        # 2. Manager 2 approves
-        self.reg_service.manager_approve_officer_registration(self.manager2, reg)
-        # 3. Officer tries to apply for Project 3 (which they now handle)
+        # 1. Officer registers for Project 1 (use active project)
+        reg = self.reg_service.officer_register_for_project(self.officer, self.project1)
+        # 2. Manager 1 approves
+        self.reg_service.manager_approve_officer_registration(self.manager, reg)
+        # 3. Officer tries to apply for Project 1 (which they now handle)
         with self.assertRaisesRegex(OperationError, "cannot apply for a project you are an approved officer for"):
-            self.app_service.apply_for_project(self.officer, self.project3, 2) # Officer is married, >21, eligible otherwise
+            self.app_service.apply_for_project(self.officer, self.project1, 2) # Officer is married, >21, eligible otherwise
 
     def test_officer_apply_for_other_project_success(self):
         # Officer can apply for project 1 (managed by manager 1, officer not registered for it)
@@ -515,22 +549,25 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         handled = self.project_service.get_handled_projects_for_officer(self.officer.nric)
         self.assertEqual(len(handled), 0)
 
-        # Register and approve for project 3
-        reg = self.reg_service.officer_register_for_project(self.officer, self.project3)
-        self.reg_service.manager_approve_officer_registration(self.manager2, reg)
+        # Register and approve for project 1 (active)
+        reg = self.reg_service.officer_register_for_project(self.officer, self.project1)
+        self.reg_service.manager_approve_officer_registration(self.manager, reg)
 
-        # Now should handle project 3
+        # Now should handle project 1
         handled = self.project_service.get_handled_projects_for_officer(self.officer.nric)
         self.assertEqual(len(handled), 1)
-        self.assertEqual(handled[0].project_name, self.project3.project_name)
+        self.assertEqual(handled[0].project_name, self.project1.project_name)
 
-        # Also check direct assignment (although approval adds automatically now)
-        self.project1.officer_nrics.append(self.officer.nric)
-        self.project_repo.update(self.project1)
+        # Also check direct assignment (via manager approving adding officer)
+        # Create a new project where manager assigns officer without registration flow
+        proj_direct = self.project_service.create_project(self.manager2, "Direct Assign", "DA Town", 1,1,1,1, NON_OVERLAP_OPEN, NON_OVERLAP_CLOSE, 2)
+        added = self.project_service.add_officer_to_project(proj_direct, self.officer.nric)
+        self.assertTrue(added)
+
         handled = self.project_service.get_handled_projects_for_officer(self.officer.nric)
         self.assertEqual(len(handled), 2)
         self.assertIn(self.project1.project_name, [p.project_name for p in handled])
-        self.assertIn(self.project3.project_name, [p.project_name for p in handled])
+        self.assertIn(proj_direct.project_name, [p.project_name for p in handled])
 
 
     def test_officer_reply_enquiry_handled_project(self):
@@ -568,6 +605,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
 
         # Action: Officer books flat
         updated_project = self.app_service.officer_book_flat(self.officer, app_successful)
+        self.assertIsNotNone(updated_project) # Ensure project is returned
 
         # Verify:
         # 1. Application status is BOOKED
@@ -627,6 +665,9 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         # Here we simulate the data preparation
         app_booked = self.app_service.find_application_by_applicant(self.applicant.nric)
         project = self.project_service.find_project_by_name(app_booked.project_name)
+
+        # Need controller instance for helper method - use class attribute
+        self.assertIsNotNone(self.controller, "Controller instance not available for test")
         receipt_data = self.controller._prepare_receipt_data(app_booked, project, self.applicant) # Using hypothetical controller method structure
 
         self.assertEqual(receipt_data["NRIC"], self.applicant.nric)
@@ -652,21 +693,24 @@ class BaseBTOIntegrationTest(unittest.TestCase):
 
     # --- Manager Flow Tests ---
     def test_manager_create_project_success(self):
+        # Manager 1 already has project 1 (active). Need to use manager 2 or non-overlapping dates.
+        # Let's use Manager 2
         name = "New Manager Project"
         proj = self.project_service.create_project(
-            self.manager, name, "Jurong", 10, 110000, 20, 210000,
+            self.manager2, name, "Jurong", 10, 110000, 20, 210000,
             FUTURE_OPEN, FUTURE_CLOSE, 5
         )
         self.assertIsNotNone(proj)
         found_proj = self.project_service.find_project_by_name(name)
         self.assertIsNotNone(found_proj)
-        self.assertEqual(found_proj.manager_nric, self.manager.nric)
+        self.assertEqual(found_proj.manager_nric, self.manager2.nric)
+
 
     def test_manager_create_project_fail_name_exists(self):
         with self.assertRaisesRegex(OperationError, "Project name.*already exists"):
             self.project_service.create_project(
                 self.manager, TEST_PROJECT1_NAME, "Jurong", 10, 1, 20, 1,
-                FUTURE_OPEN, FUTURE_CLOSE, 5
+                NON_OVERLAP_OPEN, NON_OVERLAP_CLOSE, 5 # Use non-overlapping dates to isolate name error
             )
 
     def test_manager_create_project_fail_invalid_dates(self):
@@ -682,7 +726,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             )
 
     def test_manager_create_project_fail_overlap(self):
-        # Project 1 (FUTURE_CLOSE) is active for manager 1
+        # Project 1 (TODAY - FUTURE_CLOSE) is active for manager 1
         # Try creating another project overlapping with project 1's dates
         with self.assertRaisesRegex(OperationError, "Manager already handles an active project.*during this period"):
             self.project_service.create_project(
@@ -710,24 +754,26 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             self.project_service.edit_project(self.manager2, self.project1, {'n1': 5})
 
     def test_manager_edit_project_fail_reduce_slots_below_assigned(self):
-        # Assign officer first
-        self.project1.officer_nrics.append(TEST_OFFICER_NRIC)
-        self.project_repo.update(self.project1)
+        # Assign officer first (via registration approval)
+        reg = self.reg_service.officer_register_for_project(self.officer, self.project1)
+        self.reg_service.manager_approve_officer_registration(self.manager, reg)
         self.project1 = self.project_service.find_project_by_name(TEST_PROJECT1_NAME) # Re-fetch
+        self.assertEqual(len(self.project1.officer_nrics), 1)
         # Try reducing slots to 0
         with self.assertRaisesRegex(OperationError, "Cannot reduce slots below current number of assigned officers"):
              self.project_service.edit_project(self.manager, self.project1, {'officerSlot': 0})
 
     def test_manager_edit_project_fail_date_overlap(self):
-        # Create another project for manager 1
+        # Create another project for manager 1 (non-overlapping initially)
         proj_non_overlap = self.project_service.create_project(
-            self.manager, "NonOverlap", "Area", 1, 1, 1, 1, NON_OVERLAP_OPEN, NON_OVERLAP_CLOSE, 1
+            self.manager, "NonOverlap For Edit", "Area", 1, 1, 1, 1, NON_OVERLAP_OPEN, NON_OVERLAP_CLOSE, 1
             )
         # Try editing project 1's dates to overlap with proj_non_overlap
         with self.assertRaisesRegex(OperationError, "Edited dates overlap with another active project"):
             self.project_service.edit_project(
                 self.manager, self.project1, {'openDate': NON_OVERLAP_OPEN, 'closeDate': NON_OVERLAP_CLOSE}
             )
+
 
     def test_manager_delete_project_success(self):
         proj_name = self.project1.project_name
@@ -776,6 +822,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.assertEqual(len(proj_after_reject.officer_nrics), initial_assigned_before_reject) # No change
         self.assertNotIn(self.officer2.nric, proj_after_reject.officer_nrics)
 
+
     def test_manager_approve_registration_fail_no_slots(self):
         # Set project 1 slots to 0
         self.project1.officer_slot = 0
@@ -807,6 +854,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.app_service.manager_reject_application(self.manager, app2)
         rejected_app = self.app_service.find_application_by_applicant(self.married_applicant.nric)
         self.assertEqual(rejected_app.status, Application.STATUS_UNSUCCESSFUL)
+
 
     def test_manager_approve_application_fail_no_units_auto_reject(self):
         # Set units to 0
@@ -849,6 +897,7 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.assertFalse(app2_rejected_withdrawal.request_withdrawal) # Flag cleared
         self.assertEqual(app2_rejected_withdrawal.status, original_status_app2) # Status unchanged
 
+
     def test_manager_view_all_enquiries(self):
         # Applicant submits enquiry for project 1 (managed by manager 1)
         enq1 = self.enq_service.submit_enquiry(self.applicant, self.project1, "Q1")
@@ -890,7 +939,8 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         app2 = self.app_service.apply_for_project(self.old_married_applicant, self.project1, 3)
         self.app_service.manager_approve_application(self.manager, app2)
         app2_s = self.app_service.find_application_by_applicant(self.old_married_applicant.nric)
-        self.app_service.officer_book_flat(self.officer, app2_s) # Same officer handles
+        # Use same officer to book second flat
+        self.app_service.officer_book_flat(self.officer, app2_s)
 
         # Generate report - no filters
         report_data = self.app_service.generate_booking_report_data()
@@ -939,17 +989,22 @@ class BaseBTOIntegrationTest(unittest.TestCase):
             repo.delete("NonExistentProject")
 
     def test_enquiry_repo_next_id(self):
+        # Find initial next ID based on empty file
         initial_next_id = self.enq_repo.next_id
+        self.assertEqual(initial_next_id, 1) # Should be 1 for empty file
+
         # Add one enquiry
         enq1 = Enquiry(0, self.applicant.nric, self.project1.project_name, "Text 1")
         self.enq_repo.add(enq1)
-        self.assertEqual(enq1.enquiry_id, initial_next_id)
-        self.assertEqual(self.enq_repo.next_id, initial_next_id + 1)
+        self.assertEqual(enq1.enquiry_id, initial_next_id) # ID assigned is current next_id
+        self.assertEqual(self.enq_repo.next_id, initial_next_id + 1) # next_id increments
+
         # Add another
         enq2 = Enquiry(0, self.applicant.nric, self.project1.project_name, "Text 2")
         self.enq_repo.add(enq2)
         self.assertEqual(enq2.enquiry_id, initial_next_id + 1)
         self.assertEqual(self.enq_repo.next_id, initial_next_id + 2)
+
 
     # --- Utility Tests ---
     def test_validate_nric(self):
@@ -976,19 +1031,28 @@ class BaseBTOIntegrationTest(unittest.TestCase):
         self.assertTrue(dates_overlap(d1, d4, d3, d2)) # Inner contains outer
         self.assertFalse(dates_overlap(d1, d2, d5, d6)) # No overlap
         self.assertFalse(dates_overlap(d5, d6, d1, d2)) # No overlap reversed
+        # Original overlap logic: !(end1 < start2 or start1 > end2)
+        # d1=1, d7=10; d5=11, d6=20 -> !(10 < 11 or 1 > 20) -> !(True or False) -> !True -> False. Correct.
         self.assertFalse(dates_overlap(d1, d7, d5, d6)) # Touching but no overlap (d7 < d5)
+        # d1=1, d7=10; d3=5, d7=10 -> !(10 < 5 or 1 > 10) -> !(False or False) -> !False -> True. Correct.
         self.assertTrue(dates_overlap(d1, d7, d3, d7)) # Touching end included
 
+    # --- Additional Test: Manager Overlap Logic Correction ---
+    # This test assumes you FIX the logic in ProjectService.check_manager_project_overlap
+    # to NOT check is_active_period(date.today())
+    # def test_manager_create_project_fail_overlap_corrected_logic(self):
+    #     # This test requires the fix in ProjectService.check_manager_project_overlap
+    #     # Project 1 (TODAY - FUTURE_CLOSE) exists for manager 1
+    #     # Create a NEW project with overlapping dates
+    #     with self.assertRaisesRegex(OperationError, "Manager already handles an active project.*during this period"):
+    #         self.project_service.create_project(
+    #             self.manager, "Overlap Fail Corrected", "Area", 1, 1, 1, 1,
+    #             OVERLAP1_OPEN, OVERLAP1_CLOSE, 1 # Overlaps with project 1's period
+    #         )
 
-    # --- Add More Tests as Needed ---
-    # Consider edge cases for filtering, more complex overlap scenarios, etc.
 
 # --- Run Tests ---
 if __name__ == '__main__':
-     # Need to setup the controller instance for tests that might use it indirectly
-     # We won't test the full CLI flow, but can test helper methods if needed
-     # For now, we focus on service layer testing which covers most logic
-     controller = ApplicationController() # Initialize controller AFTER patching
-     BaseBTOIntegrationTest.controller = controller # Make it accessible if needed in tests
-
+     import traceback # Add traceback for detailed setup error reporting
+     # Controller initialization moved to setUpClass for efficiency
      unittest.main(verbosity=2)
