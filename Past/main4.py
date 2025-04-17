@@ -1444,6 +1444,7 @@ class ConsoleView:
         return filters
 
 
+
 class ApplicationController:
     def __init__(self):
         self.view = ConsoleView()
