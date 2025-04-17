@@ -2433,9 +2433,6 @@ class ApplicationController:
                  self.enq_service.reply_to_enquiry(self.current_user, enquiry_to_reply, reply_text)
                  self.base_view.display_message("Reply submitted successfully.", info=True)
 
-
-
-
 if __name__ == "__main__":
     controller = ApplicationController()
     try:
