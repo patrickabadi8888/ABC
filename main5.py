@@ -27,9 +27,6 @@ class User:
     def __eq__(self, other):
         return self.nric == other.nric
 
-    def __hash__(self):
-        return hash(self.nric)
-
 class Applicant(User):
     def __init__(self, name, nric, age, marital_status, password):
         super().__init__(name, nric, age, marital_status, password)
@@ -362,7 +359,7 @@ class UserRepository:
         print(f"Total unique users loaded: {len(self.users)}")
 
     def find_user_by_nric(self, nric):
-        return self.users.get(nric)
+        return self.users.get(nric.upper())
 
     def get_all_users(self):
         return list(self.users.values())
