@@ -33,13 +33,16 @@ class User:
         return hash(self.nric)
 
 class Applicant(User):
-    pass
+    def __init__(self, name, nric, age, marital_status, password):
+        super().__init__(name, nric, age, marital_status, password)
 
 class HDBOfficer(Applicant):
-    pass
+    def __init__(self, name, nric, age, marital_status, password):
+        super().__init__(name, nric, age, marital_status, password)
 
 class HDBManager(User):
-    pass
+    def __init__(self, name, nric, age, marital_status, password):
+        super().__init__(name, nric, age, marital_status, password)
 
 class Project:
     def __init__(self, project_name, neighborhood, type1, num_units1, price1,
