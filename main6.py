@@ -619,8 +619,6 @@ class ProjectService:
     def get_handled_project_names_for_officer(self, officer_nric):
         """Gets names of projects an officer is approved for or assigned to."""
         handled_project_names = set()
-        approved_regs = self.registration_repository.find_by_project(None, status_filter=Registration.STATUS_APPROVED)
-        handled_project_names.update(reg.project_name for reg in approved_regs if reg.officer_nric == officer_nric)
         for p in self.get_all_projects():
             if officer_nric in p.officer_nrics:
                 handled_project_names.add(p.project_name)
@@ -640,15 +638,9 @@ class ProjectService:
             if not project.is_currently_active_for_application():
                 continue
 
-            can_view_any_flat = False
-            if applicant.marital_status == "Single" and applicant.age >= 35:
-                can_view_any_flat = True
-            elif applicant.marital_status == "Married" and applicant.age >= 21:
-                 can_view_any_flat = True
-
-            if not can_view_any_flat and project.num_units1 == 0:
+            if applicant.marital_status == "Single" and project.num_units1 == 0:
                 continue
-            if can_view_any_flat and project.num_units2 == 0 and project.num_units1 == 0:
+            if applicant.marital_status == "Married" and project.num_units1 == 0 and project.num_units2 == 0:
                 continue
 
             viewable.append(project)
@@ -676,12 +668,10 @@ class ProjectService:
             if existing_project == project_to_exclude:
                 continue
 
-            is_existing_active_today = existing_project.visibility and existing_project.is_active_period(date.today())
-
-            if is_existing_active_today and \
-               Utils.dates_overlap(new_opening_date, new_closing_date,
+            if Utils.dates_overlap(new_opening_date, new_closing_date,
                                    existing_project.opening_date, existing_project.closing_date):
                 return existing_project
+            
         return None
 
     def create_project(self, manager: HDBManager, name, neighborhood, n1, p1, n2, p2, od, cd, slot):
@@ -1117,10 +1107,12 @@ class RegistrationService:
 class EnquiryService:
     def __init__(self, enquiry_repository: EnquiryRepository,
                  project_service: ProjectService,
-                 user_repository: UserRepository):
+                 user_repository: UserRepository,
+                 application_repository: ApplicationRepository):
         self.enquiry_repository = enquiry_repository
         self.project_service = project_service
         self.user_repository = user_repository
+        self.application_repository = application_repository
 
     def find_enquiry_by_id(self, enquiry_id):
         return self.enquiry_repository.find_by_id(enquiry_id)
@@ -1872,19 +1864,7 @@ class ApplicantController(BaseRoleController):
 
 class OfficerController(ApplicantController):
     def run_menu(self):
-        officer_actions = {
-            "Register for Project as Officer": self.handle_register_for_project,
-            "View My Officer Registrations": self.handle_view_my_registrations,
-            "View Handled Projects Details": self.handle_view_handled_projects,
-            "View/Reply Enquiries (Handled Projects)": self.handle_view_reply_enquiries_officer,
-            "Book Flat for Applicant": self.handle_book_flat,
-            "Generate Booking Receipt": self.handle_generate_receipt,
-        }
         applicant_actions = {
-            k: v for k, v in super().run_menu.__globals__['ApplicantController'].__dict__.items()
-            if k.startswith('handle_') and k not in officer_actions
-        }
-        applicant_actions_manual = {
             "View/Filter Projects": self.handle_view_projects,
             "Apply for Project": self.handle_apply_for_project,
             "View My Application Status": self.handle_view_application_status,
@@ -1894,9 +1874,17 @@ class OfficerController(ApplicantController):
             "Edit My Enquiry": self.handle_edit_my_enquiry,
             "Delete My Enquiry": self.handle_delete_my_enquiry,
         }
+        officer_actions = {
+            "Register for Project as Officer": self.handle_register_for_project,
+            "View My Officer Registrations": self.handle_view_my_registrations,
+            "View Handled Projects Details": self.handle_view_handled_projects,
+            "View/Reply Enquiries (Handled Projects)": self.handle_view_reply_enquiries_officer,
+            "Book Flat for Applicant": self.handle_book_flat,
+            "Generate Booking Receipt": self.handle_generate_receipt,
+        }
 
 
-        actions = {**applicant_actions_manual, **officer_actions, **self._get_common_actions()}
+        actions = {**applicant_actions, **officer_actions, **self._get_common_actions()}
         options = list(actions.keys())
         base_view = self.views['base']
 
@@ -2448,7 +2436,7 @@ class ApplicationController:
             self.services['project'] = ProjectService(project_repo, reg_repo)
             self.services['reg'] = RegistrationService(reg_repo, self.services['project'], app_repo)
             self.services['app'] = ApplicationService(app_repo, self.services['project'], self.services['reg'])
-            self.services['enq'] = EnquiryService(enq_repo, self.services['project'], user_repo)
+            self.services['enq'] = EnquiryService(enq_repo, self.services['project'], user_repo, app_repo)
             self.services['auth'] = AuthService(user_repo)
             self.services['report'] = ReportService(app_repo, self.services['project'], user_repo)
 
