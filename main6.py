@@ -386,11 +386,11 @@ class UserRepository:
         return list(self.users.values())
 
     def save_user(self, user):
-        if isinstance(user, HDBManager):
+        if user.get_role() == "HDB Manager":
             repo = self.manager_repo
-        elif isinstance(user, HDBOfficer):
+        elif user.get_role() == "HDB Officer":
             repo = self.officer_repo
-        elif isinstance(user, Applicant):
+        elif user.get_role() == "Applicant":
             repo = self.applicant_repo
         else:
             raise TypeError("Unknown user type cannot be saved.")
@@ -590,13 +590,7 @@ class AuthService:
             raise OperationError(f"Failed to save new password: {e}")
 
     def get_user_role(self, user: User):
-        if isinstance(user, HDBManager):
-            return "HDB Manager"
-        elif isinstance(user, HDBOfficer):
-            return "HDB Officer"
-        elif isinstance(user, Applicant):
-            return "Applicant"
-        return "Unknown"
+        return user.get_role()
 
 class ProjectService:
     def __init__(self, project_repository: ProjectRepository,
@@ -841,13 +835,13 @@ class ApplicationService:
         if units <= 0:
             raise OperationError(f"No {flat_type}-Room units available in this project.")
 
-        if isinstance(applicant, HDBOfficer):
+        if applicant.get_role() == "HDB Officer":
             existing_registration = self.registration_service.find_registration(applicant.nric, project.project_name)
             if existing_registration:
                 raise OperationError("You cannot apply for a project you have registered (or been approved) as an officer for.")
 
     def apply_for_project(self, applicant: Applicant, project: Project, flat_type: int):
-        if isinstance(applicant, HDBManager):
+        if applicant.get_role() == "HDB Manager":
             raise OperationError("HDB Managers cannot apply for BTO projects.")
 
         self._check_applicant_eligibility(applicant, project, flat_type)
@@ -1180,13 +1174,13 @@ class EnquiryService:
         can_reply = False
         replier_role = ""
 
-        if isinstance(replier_user, HDBManager):
+        if replier_user.get_role() == "HDB Manager":
             replier_role = "Manager"
             if project.manager_nric == replier_user.nric:
                 can_reply = True
             else:
                 raise OperationError("Managers can only reply to enquiries for projects they manage.")
-        elif isinstance(replier_user, HDBOfficer):
+        elif replier_user.get_role() == "HDB Officer":
             replier_role = "Officer"
             handled_names = self.project_service.get_handled_project_names_for_officer(replier_user.nric)
             if project.project_name in handled_names:
@@ -1196,7 +1190,8 @@ class EnquiryService:
         else:
             raise OperationError("Only Managers or Officers can reply to enquiries.")
 
-
+        if not can_reply:
+            raise OperationError("You do not have permission to reply to this enquiry.")
         replier_name = replier_user.name
         enquiry.reply = f"[{replier_role} - {replier_name}]: {reply_text}"
         try:
