@@ -45,6 +45,7 @@ class HDBManager(User):
     
     def get_role(self):
         return "HDB Manager"
+    
 class Project:
     def __init__(self, project_name, neighborhood, type1, num_units1, price1,
                  type2, num_units2, price2, opening_date, closing_date,
