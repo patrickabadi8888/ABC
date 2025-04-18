@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, date
+import csv
 
 APPLICANT_CSV = 'ApplicantList.csv'
 OFFICER_CSV = 'OfficerList.csv'
@@ -233,11 +234,10 @@ class Enquiry:
         return bool(self.reply)
 
 class BaseRepository:
-    def __init__(self, csv_file, model_class, required_headers, delimiter=','):
+    def __init__(self, csv_file, model_class, required_headers):
         self.csv_file = csv_file
         self.model_class = model_class
         self.required_headers = required_headers
-        self.delimiter = delimiter
         self.data = {}
         self._load_data()
 
@@ -246,8 +246,9 @@ class BaseRepository:
             print(f"Warning: Data file not found: {self.csv_file}. Creating empty file.")
             try:
                 with open(self.csv_file, 'w', newline='') as file:
-                    file.write(self.delimiter.join(self.required_headers) + '\n')
-            except Exception as e:
+                    writer = csv.writer(file)
+                    writer.writerow(self.required_headers)
+            except IOError as e:
                 raise DataSaveError(f"Error creating data file {self.csv_file}: {e}")
 
     def _load_data(self):
@@ -255,66 +256,70 @@ class BaseRepository:
         self.data = {}
         try:
             with open(self.csv_file, 'r', newline='') as file:
-                lines = file.read().splitlines()
+                reader = csv.reader(file)
+                header = next(reader, None)
 
-            if not lines:
-                print(f"Info: Data file {self.csv_file} is empty or contains only a header.")
-                return
+                if not header or not all(h in header for h in self.required_headers):
+                    raise DataLoadError(f"Invalid or missing headers in {self.csv_file}. Expected: {self.required_headers}, Found: {header}")
 
-            header = lines[0].split(self.delimiter)
-            if not all(h in header for h in self.required_headers):
-                raise DataLoadError(
-                    f"Invalid or missing headers in {self.csv_file}. "
-                    f"Expected: {self.required_headers}, Found: {header}"
-                )
-            header_map = {h: i for i, h in enumerate(header)}
+                header_map = {h: i for i, h in enumerate(header)}
 
-            for idx, line in enumerate(lines[1:], start=2):
-                if not line.strip():
-                    continue
-                parts = line.split(self.delimiter)
-                if len(parts) < len(header):
-                    print(f"Warning: Skipping short row {idx} in {self.csv_file}: {line}")
-                    continue
+                for i, row in enumerate(reader):
+                    if len(row) < len(header):
+                        print(f"Warning: Skipping short row {i+1} in {self.csv_file}: {row}")
+                        continue
 
-                row_dict = {}
-                valid_row = True
-                for h in self.required_headers:
+                    row_dict = {}
+                    valid_row = True
+                    for req_h in self.required_headers:
+                        try:
+                            idx = header_map[req_h]
+                            row_dict[req_h] = row[idx]
+                        except (IndexError, KeyError):
+                            print(f"Warning: Missing expected column '{req_h}' in row {i+1} of {self.csv_file}. Skipping.")
+                            valid_row = False
+                            break
+                    if not valid_row:
+                        continue
+
                     try:
-                        row_dict[h] = parts[header_map[h]]
-                    except (IndexError, KeyError):
-                        print(f"Warning: Missing expected column '{h}' in row {idx} of {self.csv_file}. Skipping.")
-                        valid_row = False
-                        break
-                if not valid_row:
-                    continue
+                        instance = self._create_instance(row_dict)
+                        key = self._get_key(instance)
+                        if key in self.data:
+                            if self.model_class in [User, Project, Applicant, HDBOfficer, HDBManager]:
+                                raise IntegrityError(f"Duplicate key '{key}' found for critical data in {self.csv_file}. Aborting load.")
+                            else:
+                                print(f"Warning: Duplicate key '{key}' found in {self.csv_file}. Overwriting with row {i+1}.")
+                        self.data[key] = instance
+                    except (ValueError, TypeError, IndexError, IntegrityError) as e:
+                        print(f"Warning: Error processing row {i+1} in {self.csv_file}: {row}. Error: {e}. Skipping.")
+                    except Exception as e:
+                        print(f"Warning: Unexpected error processing row {i+1} in {self.csv_file}: {row}. Error: {e}. Skipping.")
 
-                try:
-                    instance = self._create_instance(row_dict)
-                    key = self._get_key(instance)
-                    if key in self.data and self.model_class in [User, Project, Applicant, HDBOfficer, HDBManager]:
-                        raise IntegrityError(f"Duplicate key '{key}' found for critical data in {self.csv_file}. Aborting load.")
-                    self.data[key] = instance
-                except (ValueError, TypeError, IntegrityError) as e:
-                    print(f"Warning: Error processing row {idx} in {self.csv_file}: {line}. Error: {e}. Skipping.")
-                except Exception as e:
-                    print(f"Warning: Unexpected error processing row {idx} in {self.csv_file}: {line}. Error: {e}. Skipping.")
-
+        except FileNotFoundError:
+            print(f"Info: Data file {self.csv_file} was not found, created empty.")
+        except StopIteration:
+            print(f"Info: Data file {self.csv_file} is empty or contains only a header.")
+        except IOError as e:
+            raise DataLoadError(f"Error reading data file {self.csv_file}: {e}")
+        except IntegrityError as e:
+             raise DataLoadError(f"Fatal integrity error loading {self.csv_file}: {e}")
         except Exception as e:
-            raise DataLoadError(f"Error loading data from {self.csv_file}: {e}")
+            raise DataLoadError(f"Unexpected error loading data from {self.csv_file}: {e}")
         print(f"Loaded {len(self.data)} items from {self.csv_file}.")
 
     def save_data(self):
         try:
             with open(self.csv_file, 'w', newline='') as file:
-                # write header
-                file.write(self.delimiter.join(self.required_headers) + '\n')
-                # write rows in sorted order
-                for key in sorted(self.data.keys()):
-                    row = self._get_row_data(self.data[key])
-                    file.write(self.delimiter.join(str(x) for x in row) + '\n')
-        except Exception as e:
+                writer = csv.writer(file)
+                writer.writerow(self.required_headers)
+                sorted_keys = sorted(self.data.keys())
+                for key in sorted_keys:
+                    writer.writerow(self._get_row_data(self.data[key]))
+        except IOError as e:
             raise DataSaveError(f"Error saving data to {self.csv_file}: {e}")
+        except Exception as e:
+            raise DataSaveError(f"Unexpected error saving data to {self.csv_file}: {e}")
 
     def get_all(self):
         return list(self.data.values())
@@ -341,7 +346,7 @@ class BaseRepository:
             raise IntegrityError(f"Item with key '{key}' not found for deletion in {self.csv_file}.")
         del self.data[key]
         self.save_data()
-        
+       
 class UserRepository:
     def __init__(self):
         self.applicant_repo = self._create_sub_repo(APPLICANT_CSV, Applicant, ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'])
