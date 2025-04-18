@@ -1,0 +1,1583 @@
+# File name: main.py
+# Ensure the project root is in the Python path if running from elsewhere
+# import sys
+# import os
+# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from controller.application_controller import ApplicationController
+
+if __name__ == "__main__":
+    # Create data directory if it doesn't exist
+    # This should ideally be handled more robustly (e.g., config)
+    import os
+    data_dir = "data"
+    if not os.path.exists(data_dir):
+        try:
+            os.makedirs(data_dir)
+            print(f"Created data directory: {data_dir}")
+        except OSError as e:
+            print(f"Error creating data directory {data_dir}: {e}")
+            # Decide if this is fatal or not
+
+    # Start the application
+    app = ApplicationController()
+    app.run()
+----
+# File name: sum.py
+import glob
+
+# print all files and their contents in the format recursive
+# # File name
+#  File content
+# ----
+s = ''
+for filename in glob.glob('*.py') + glob.glob('*/**/*.py'):
+    if filename == "__init__.py":
+        continue
+    print(filename)
+    s += f'# File name: {filename}\n'
+    
+    with open(filename, 'r') as f:
+        content = f.read()
+        s += f'{content}\n'
+    s += '----\n'
+
+with open('all_files.txt', 'w') as f:
+    f.write(s)
+----
+# File name: controller\actions\applicant_actions.py
+from typing import Dict, Any, Optional, List
+from controller.interfaces.iaction import IAction
+from service.project_service import ProjectService
+from service.application_service import ApplicationService
+from service.enquiry_service import EnquiryService
+from repository.interfaces.iuser_repository import IUserRepository
+from view.project_view import ProjectView
+from view.application_view import ApplicationView
+from view.enquiry_view import EnquiryView
+from view.base_view import BaseView
+from utils.input_util import InputUtil
+from common.enums import UserRole
+from model.applicant import Applicant
+from model.project import Project
+from common.enums import ApplicationStatus
+from common.exceptions import OperationError
+
+# Helper function within this module
+def _get_viewable_projects(applicant: Applicant, services: Dict[str, Any]) -> List[Project]:
+    project_service: ProjectService = services['project']
+    app_service: ApplicationService = services['app']
+    current_app = app_service.find_application_by_applicant(applicant.nric)
+    return project_service.get_viewable_projects_for_applicant(applicant, current_app)
+
+class ViewProjectsApplicantAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+        user_filters = controller_data.get('filters', {}) if controller_data else {}
+
+        projects = _get_viewable_projects(current_user, services)
+        filtered_projects = project_service.filter_projects(projects, **user_filters)
+
+        base_view.display_message(f"Current Filters: {user_filters or 'None'}", info=True)
+        if not filtered_projects:
+            base_view.display_message("No projects match your criteria or eligibility.")
+        else:
+            base_view.display_message("Displaying projects you are eligible to view/apply for:")
+            for project in filtered_projects:
+                project_view.display_project_details(project, UserRole.APPLICANT, current_user.marital_status)
+
+        if InputUtil.get_yes_no_input("Update filters?"):
+            new_filters = project_view.prompt_project_filters(user_filters)
+            if controller_data is not None: controller_data['filters'] = new_filters # Update shared filters
+            base_view.display_message("Filters updated. View projects again to see changes.", info=True)
+        return None
+
+class ApplyForProjectAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        project_view: ProjectView = views['project']
+        app_view: ApplicationView = views['app']
+        base_view: BaseView = views['base']
+
+        potential_projects = _get_viewable_projects(current_user, services)
+        selectable_projects = [p for p in potential_projects if p.is_currently_visible_and_active()]
+
+        project_to_apply = project_view.select_project(selectable_projects, action_verb="apply for")
+        if not project_to_apply: return None
+
+        flat_type = app_view.prompt_flat_type_selection(project_to_apply, current_user)
+        if flat_type is None: return None
+
+        app_service.apply_for_project(current_user, project_to_apply, flat_type)
+        base_view.display_message(f"Application submitted successfully for {flat_type.to_string()} in '{project_to_apply.project_name}'.", info=True)
+        return None
+
+class ViewApplicationStatusAction(IAction):
+     def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        project_service: ProjectService = services['project']
+        app_view: ApplicationView = views['app']
+        base_view: BaseView = views['base']
+        user_repo: IUserRepository = services['user'] # Needed for past apps view
+
+        application = app_service.find_application_by_applicant(current_user.nric)
+        if not application:
+            base_view.display_message("You do not have an active BTO application.")
+            all_apps = app_service.get_all_applications_by_applicant(current_user.nric) # Use specific method
+            unsuccessful = [app for app in all_apps if app.status == ApplicationStatus.UNSUCCESSFUL]
+            if unsuccessful:
+                 base_view.display_message("You have past unsuccessful applications:")
+                 app_view.select_application(unsuccessful, user_repo, action_verb="view past") # Show list
+            return None
+
+        project = project_service.find_project_by_name(application.project_name)
+        if not project:
+            base_view.display_message(f"Error: Project '{application.project_name}' not found.", error=True)
+            app_view.display_dict("Application Data (Project Missing)", application.to_csv_dict())
+            return None
+
+        app_view.display_application_details(application, project, current_user)
+        return None
+
+class RequestWithdrawalAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        base_view: BaseView = views['base']
+
+        application = app_service.find_application_by_applicant(current_user.nric)
+        if not application:
+            raise OperationError("You do not have an active BTO application to withdraw.")
+
+        prompt = f"Confirm request withdrawal for application to '{application.project_name}'? (Status: {application.status.value})"
+        if InputUtil.get_yes_no_input(prompt):
+            app_service.request_withdrawal(application)
+            base_view.display_message("Withdrawal requested. Pending Manager action.", info=True)
+        return None
+
+class SubmitEnquiryAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        project_view: ProjectView = views['project']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        viewable_projects = _get_viewable_projects(current_user, services)
+        project_to_enquire = project_view.select_project(viewable_projects, action_verb="submit enquiry for")
+        if not project_to_enquire: return None
+
+        text = enq_view.prompt_enquiry_text()
+        if not text: return None
+
+        enq_service.submit_enquiry(current_user, project_to_enquire, text)
+        base_view.display_message("Enquiry submitted successfully.", info=True)
+        return None
+
+class ViewMyEnquiriesAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        project_service: ProjectService = services['project']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        my_enquiries = enq_service.get_enquiries_by_applicant(current_user.nric)
+        if not my_enquiries:
+            base_view.display_message("You have not submitted any enquiries.")
+            return None
+
+        base_view.display_message("Your Submitted Enquiries:", info=True)
+        for enquiry in my_enquiries:
+            project = project_service.find_project_by_name(enquiry.project_name)
+            p_name = project.project_name if project else f"Unknown/Deleted ({enquiry.project_name})"
+            enq_view.display_enquiry_details(enquiry, p_name, current_user.name)
+        return None
+
+class EditMyEnquiryAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        my_enquiries = enq_service.get_enquiries_by_applicant(current_user.nric)
+        editable = [e for e in my_enquiries if not e.is_replied()]
+
+        enquiry_to_edit = enq_view.select_enquiry(editable, action_verb="edit")
+        if not enquiry_to_edit: return None
+
+        new_text = enq_view.prompt_enquiry_text(current_text=enquiry_to_edit.text)
+        if not new_text: return None
+
+        enq_service.edit_enquiry(current_user, enquiry_to_edit, new_text)
+        base_view.display_message(f"Enquiry ID {enquiry_to_edit.enquiry_id} updated.", info=True)
+        return None
+
+class DeleteMyEnquiryAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Applicant] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        my_enquiries = enq_service.get_enquiries_by_applicant(current_user.nric)
+        deletable = [e for e in my_enquiries if not e.is_replied()]
+
+        enquiry_to_delete = enq_view.select_enquiry(deletable, action_verb="delete")
+        if not enquiry_to_delete: return None
+
+        if InputUtil.get_yes_no_input(f"Delete Enquiry ID {enquiry_to_delete.enquiry_id}?"):
+            enq_service.delete_enquiry(current_user, enquiry_to_delete)
+            base_view.display_message(f"Enquiry ID {enquiry_to_delete.enquiry_id} deleted.", info=True)
+        return None
+----
+# File name: controller\actions\common_actions.py
+from typing import Dict, Any, Optional
+from controller.interfaces.iaction import IAction
+from service.auth_service import AuthService # Assuming interface/concrete class path
+from view.auth_view import AuthView
+from view.base_view import BaseView
+from common.exceptions import OperationError
+from model.user import User
+
+class ChangePasswordAction(IAction):
+    """Action to handle changing the current user's password."""
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[User] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        if not current_user:
+            views['base'].display_message("Cannot change password. No user logged in.", error=True)
+            return None
+
+        auth_service: AuthService = services['auth']
+        auth_view: AuthView = views['auth']
+        base_view: BaseView = views['base']
+
+        # Get current password for verification first
+        current_password_attempt = auth_view.get_password("Enter your CURRENT password for verification")
+        if not current_user.check_password(current_password_attempt):
+             base_view.display_message("Verification failed: Incorrect current password.", error=True)
+             return None # Abort change
+
+        # If verification passes, get the new password
+        new_password = auth_view.prompt_change_password() # View handles new/confirm match
+        if new_password:
+            try:
+                auth_service.change_password(current_user, new_password)
+                base_view.display_message("Password changed successfully.", info=True)
+            except OperationError as e:
+                 base_view.display_message(str(e), error=True)
+            # Let other exceptions propagate up
+        return None
+
+class LogoutAction(IAction):
+    """Action to signal user logout."""
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[User] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        return "LOGOUT"
+
+class ExitAction(IAction):
+    """Action to signal application exit."""
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[User] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        return "EXIT"
+
+class NoOpAction(IAction):
+    """Action that does nothing, useful for menu separators."""
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[User] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        return None # Just continue
+----
+# File name: controller\actions\manager_actions.py
+from typing import Dict, Any, Optional, List, Tuple
+from controller.interfaces.iaction import IAction
+from service.project_service import ProjectService
+from service.application_service import ApplicationService
+from service.registration_service import RegistrationService
+from service.enquiry_service import EnquiryService
+from service.report_service import ReportService
+from repository.interfaces.iuser_repository import IUserRepository
+from view.project_view import ProjectView
+from view.application_view import ApplicationView
+from view.officer_view import OfficerView
+from view.manager_view import ManagerView
+from view.enquiry_view import EnquiryView
+from view.report_view import ReportView
+from view.base_view import BaseView
+from utils.input_util import InputUtil
+from common.enums import UserRole, RegistrationStatus, ApplicationStatus
+from common.exceptions import OperationError, IntegrityError
+from model.hdb_manager import HDBManager
+from model.project import Project
+from model.registration import Registration
+from model.application import Application
+from model.enquiry import Enquiry
+from model.user import User # For lookups
+
+# Helper function within this module
+def _select_managed_project(manager: HDBManager, services: Dict[str, Any], views: Dict[str, Any], action_verb="manage") -> Optional[Project]:
+    project_service: ProjectService = services['project']
+    project_view: ProjectView = views['project']
+    base_view: BaseView = views['base']
+    my_projects = project_service.get_projects_by_manager(manager.nric)
+    if not my_projects:
+        base_view.display_message("You do not manage any projects.")
+        return None
+    return project_view.select_project(my_projects, action_verb=action_verb)
+
+class CreateProjectAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+
+        details = project_view.prompt_create_project_details()
+        if not details: return None
+
+        new_project = project_service.create_project(
+            current_user, details['name'], details['neighborhood'],
+            details['n1'], details['p1'], details['n2'], details['p2'],
+            details['od'], details['cd'], details['slot']
+        )
+        base_view.display_message(f"Project '{new_project.project_name}' created.", info=True)
+        return None
+
+class EditProjectAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+
+        project_to_edit = _select_managed_project(current_user, services, views, action_verb="edit")
+        if not project_to_edit: return None
+
+        updates = project_view.prompt_edit_project_details(project_to_edit)
+        if updates is None: # Cancelled or error
+             if isinstance(updates, dict) and not updates: # Explicitly check for empty dict (no changes)
+                 base_view.display_message("No changes entered.", info=True)
+             return None
+
+        project_service.edit_project(current_user, project_to_edit, updates)
+        base_view.display_message(f"Project '{project_to_edit.project_name}' updated.", info=True)
+        return None
+
+class DeleteProjectAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        base_view: BaseView = views['base']
+
+        project_to_delete = _select_managed_project(current_user, services, views, action_verb="delete")
+        if not project_to_delete: return None
+
+        warning = f"Delete project '{project_to_delete.project_name}'? This cannot be undone. Proceed?"
+        if InputUtil.get_yes_no_input(warning):
+            project_service.delete_project(current_user, project_to_delete)
+            base_view.display_message(f"Project '{project_to_delete.project_name}' deleted.", info=True)
+        else:
+            base_view.display_message("Deletion cancelled.", info=True)
+        return None
+
+class ToggleProjectVisibilityAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        base_view: BaseView = views['base']
+
+        project_to_toggle = _select_managed_project(current_user, services, views, action_verb="toggle visibility for")
+        if not project_to_toggle: return None
+
+        new_status = project_service.toggle_project_visibility(current_user, project_to_toggle)
+        base_view.display_message(f"Project '{project_to_toggle.project_name}' visibility set to {new_status}.", info=True)
+        return None
+
+class ViewAllProjectsManagerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+        user_filters = controller_data.get('filters', {}) if controller_data else {}
+
+        all_projects = project_service.get_all_projects()
+        filtered_projects = project_service.filter_projects(all_projects, **user_filters)
+
+        base_view.display_message(f"Current Filters: {user_filters or 'None'}", info=True)
+        if not filtered_projects:
+            base_view.display_message("No projects match your criteria.")
+        else:
+            base_view.display_message("Displaying All Projects:", info=True)
+            for project in filtered_projects:
+                project_view.display_project_details(project, UserRole.HDB_MANAGER)
+
+        if InputUtil.get_yes_no_input("Update filters?"):
+            new_filters = project_view.prompt_project_filters(user_filters)
+            if controller_data is not None: controller_data['filters'] = new_filters
+            base_view.display_message("Filters updated. View projects again.", info=True)
+        return None
+
+class ViewMyProjectsManagerAction(IAction):
+     def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+
+        my_projects = project_service.get_projects_by_manager(current_user.nric)
+        if not my_projects:
+            base_view.display_message("You are not managing any projects.")
+            return None
+
+        base_view.display_message("Projects You Manage:", info=True)
+        for project in my_projects:
+            project_view.display_project_details(project, UserRole.HDB_MANAGER)
+        return None
+
+# --- Officer Registration Management ---
+class ViewOfficerRegistrationsAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        reg_service: RegistrationService = services['reg']
+        user_repo: IUserRepository = services['user']
+        officer_view: OfficerView = views['officer']
+        base_view: BaseView = views['base']
+
+        project_to_view = _select_managed_project(current_user, services, views, "view officer registrations for")
+        if not project_to_view: return None
+
+        registrations = reg_service.get_registrations_for_project(project_to_view.project_name)
+        if not registrations:
+            base_view.display_message(f"No officer registrations for '{project_to_view.project_name}'.")
+            return None
+
+        base_view.display_message(f"Officer Registrations for '{project_to_view.project_name}':", info=True)
+        officer_view.select_registration(registrations, user_repo, action_verb="view list") # Just display list
+        return None
+
+# Helper for selecting pending registrations
+def _select_pending_registration(manager: HDBManager, services: Dict[str, Any], views: Dict[str, Any], action_verb="action") -> Optional[Registration]:
+    reg_service: RegistrationService = services['reg']
+    user_repo: IUserRepository = services['user']
+    officer_view: OfficerView = views['officer']
+    base_view: BaseView = views['base']
+    project_service: ProjectService = services['project']
+
+    my_projects = project_service.get_projects_by_manager(manager.nric)
+    pending_regs = []
+    for project in my_projects:
+        pending_regs.extend(reg_service.get_registrations_for_project(project.project_name, RegistrationStatus.PENDING))
+
+    if not pending_regs:
+        base_view.display_message("No pending officer registrations found for your projects.")
+        return None
+    return officer_view.select_registration(pending_regs, user_repo, action_verb=action_verb)
+
+class ApproveOfficerRegistrationAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        reg_service: RegistrationService = services['reg']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        reg_to_approve = _select_pending_registration(current_user, services, views, action_verb="approve")
+        if not reg_to_approve: return None
+
+        officer = user_repo.find_user_by_nric(reg_to_approve.officer_nric)
+        project = project_service.find_project_by_name(reg_to_approve.project_name)
+        if not officer or not project: raise IntegrityError("Officer or Project not found.")
+
+        manager_view.display_officer_registration_for_approval(reg_to_approve, officer, project)
+        if InputUtil.get_yes_no_input(f"Approve {officer.name} for '{project.project_name}'?"):
+             reg_service.manager_approve_officer_registration(current_user, reg_to_approve)
+             base_view.display_message(f"Registration for {officer.name} approved.", info=True)
+        else: base_view.display_message("Approval cancelled.")
+        return None
+
+class RejectOfficerRegistrationAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        reg_service: RegistrationService = services['reg']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        reg_to_reject = _select_pending_registration(current_user, services, views, action_verb="reject")
+        if not reg_to_reject: return None
+
+        officer = user_repo.find_user_by_nric(reg_to_reject.officer_nric)
+        project = project_service.find_project_by_name(reg_to_reject.project_name)
+        if not officer or not project: raise IntegrityError("Officer or Project not found.")
+
+        manager_view.display_officer_registration_for_approval(reg_to_reject, officer, project)
+        if InputUtil.get_yes_no_input(f"Reject {officer.name} for '{project.project_name}'?"):
+             reg_service.manager_reject_officer_registration(current_user, reg_to_reject)
+             base_view.display_message(f"Registration for {officer.name} rejected.", info=True)
+        else: base_view.display_message("Rejection cancelled.")
+        return None
+
+# --- Application Management ---
+class ViewApplicationsAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        user_repo: IUserRepository = services['user']
+        app_view: ApplicationView = views['app']
+        base_view: BaseView = views['base']
+
+        project_to_view = _select_managed_project(current_user, services, views, "view applications for")
+        if not project_to_view: return None
+
+        applications = app_service.get_applications_for_project(project_to_view.project_name)
+        if not applications:
+            base_view.display_message(f"No applications found for '{project_to_view.project_name}'.")
+            return None
+
+        base_view.display_message(f"Applications for '{project_to_view.project_name}':", info=True)
+        app_view.select_application(applications, user_repo, action_verb="view list") # Just display list
+        return None
+
+# Helper for selecting pending applications
+def _select_pending_application(manager: HDBManager, services: Dict[str, Any], views: Dict[str, Any], action_verb="action") -> Optional[Application]:
+    app_service: ApplicationService = services['app']
+    user_repo: IUserRepository = services['user']
+    app_view: ApplicationView = views['app']
+    base_view: BaseView = views['base']
+    project_service: ProjectService = services['project']
+
+    my_projects = project_service.get_projects_by_manager(manager.nric)
+    pending_apps = []
+    for project in my_projects:
+        apps = app_service.get_applications_for_project(project.project_name)
+        pending_apps.extend([app for app in apps if app.status == ApplicationStatus.PENDING and not app.request_withdrawal])
+
+    if not pending_apps:
+        base_view.display_message("No pending applications (without withdrawal requests) found.")
+        return None
+    return app_view.select_application(pending_apps, user_repo, action_verb=action_verb)
+
+class ApproveApplicationAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        app_to_approve = _select_pending_application(current_user, services, views, action_verb="approve")
+        if not app_to_approve: return None
+
+        applicant = user_repo.find_user_by_nric(app_to_approve.applicant_nric)
+        project = project_service.find_project_by_name(app_to_approve.project_name)
+        if not applicant or not project: raise IntegrityError("Applicant or Project not found.")
+
+        manager_view.display_application_for_approval(app_to_approve, applicant, project)
+        if InputUtil.get_yes_no_input(f"Approve {applicant.name}'s application for '{project.project_name}'?"):
+             app_service.manager_approve_application(current_user, app_to_approve)
+             base_view.display_message(f"Application for {applicant.name} approved (Status: {app_to_approve.status.value}).", info=True)
+        else: base_view.display_message("Approval cancelled.")
+        return None
+
+class RejectApplicationAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        app_to_reject = _select_pending_application(current_user, services, views, action_verb="reject")
+        if not app_to_reject: return None
+
+        applicant = user_repo.find_user_by_nric(app_to_reject.applicant_nric)
+        project = project_service.find_project_by_name(app_to_reject.project_name)
+        if not applicant or not project: raise IntegrityError("Applicant or Project not found.")
+
+        manager_view.display_application_for_approval(app_to_reject, applicant, project)
+        if InputUtil.get_yes_no_input(f"Reject {applicant.name}'s application for '{project.project_name}'?"):
+             app_service.manager_reject_application(current_user, app_to_reject)
+             base_view.display_message(f"Application for {applicant.name} rejected.", info=True)
+        else: base_view.display_message("Rejection cancelled.")
+        return None
+
+# Helper for selecting applications with withdrawal requests
+def _select_withdrawal_request(manager: HDBManager, services: Dict[str, Any], views: Dict[str, Any], action_verb="action") -> Optional[Application]:
+    app_service: ApplicationService = services['app']
+    user_repo: IUserRepository = services['user']
+    app_view: ApplicationView = views['app']
+    base_view: BaseView = views['base']
+    project_service: ProjectService = services['project']
+
+    my_projects = project_service.get_projects_by_manager(manager.nric)
+    apps_with_request = []
+    for project in my_projects:
+        apps = app_service.get_applications_for_project(project.project_name)
+        apps_with_request.extend([app for app in apps if app.request_withdrawal])
+
+    if not apps_with_request:
+        base_view.display_message("No pending withdrawal requests found.")
+        return None
+    return app_view.select_application(apps_with_request, user_repo, action_verb=action_verb)
+
+class ApproveWithdrawalAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        app_to_action = _select_withdrawal_request(current_user, services, views, action_verb="approve withdrawal for")
+        if not app_to_action: return None
+
+        applicant = user_repo.find_user_by_nric(app_to_action.applicant_nric)
+        project = project_service.find_project_by_name(app_to_action.project_name)
+        if not applicant or not project: raise IntegrityError("Applicant or Project not found.")
+
+        manager_view.display_withdrawal_request_for_approval(app_to_action, applicant, project)
+        if InputUtil.get_yes_no_input(f"Approve withdrawal for {applicant.name} (Project: {project.project_name})?"):
+             app_service.manager_approve_withdrawal(current_user, app_to_action)
+             base_view.display_message(f"Withdrawal for {applicant.name} approved. Status set to UNSUCCESSFUL.", info=True)
+        else: base_view.display_message("Approval cancelled.")
+        return None
+
+class RejectWithdrawalAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        base_view: BaseView = views['base']
+        manager_view: ManagerView = views['manager']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+
+        app_to_action = _select_withdrawal_request(current_user, services, views, action_verb="reject withdrawal for")
+        if not app_to_action: return None
+
+        applicant = user_repo.find_user_by_nric(app_to_action.applicant_nric)
+        project = project_service.find_project_by_name(app_to_action.project_name)
+        if not applicant or not project: raise IntegrityError("Applicant or Project not found.")
+
+        manager_view.display_withdrawal_request_for_approval(app_to_action, applicant, project)
+        if InputUtil.get_yes_no_input(f"Reject withdrawal for {applicant.name} (Project: {project.project_name})?"):
+             app_service.manager_reject_withdrawal(current_user, app_to_action)
+             base_view.display_message(f"Withdrawal request for {applicant.name} rejected.", info=True)
+        else: base_view.display_message("Rejection cancelled.")
+        return None
+
+# --- Reporting & Enquiries ---
+class GenerateBookingReportAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        report_service: ReportService = services['report']
+        report_view: ReportView = views['report']
+
+        filters = report_view.prompt_report_filters()
+        report_data = report_service.generate_booking_report_data(**filters)
+        headers = ["NRIC", "Applicant Name", "Age", "Marital Status", "Flat Type", "Project Name", "Neighborhood"]
+        report_view.display_report("Booking Report", report_data, headers)
+        return None
+
+class ViewAllEnquiriesManagerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        user_repo: IUserRepository = services['user']
+        project_service: ProjectService = services['project']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        all_enquiries = enq_service.get_all_enquiries()
+        if not all_enquiries:
+            base_view.display_message("There are no enquiries in the system.")
+            return None
+
+        base_view.display_message("All System Enquiries:", info=True)
+        for enquiry in all_enquiries:
+            applicant = user_repo.find_user_by_nric(enquiry.applicant_nric)
+            applicant_name = applicant.name if applicant else "Unknown"
+            project = project_service.find_project_by_name(enquiry.project_name)
+            p_name = project.project_name if project else f"Unknown/Deleted ({enquiry.project_name})"
+            enq_view.display_enquiry_details(enquiry, p_name, applicant_name)
+        return None
+
+# Helper for manager enquiry actions
+def _get_enquiries_for_manager(manager: HDBManager, services: Dict[str, Any]) -> List[Tuple[Enquiry, str]]:
+    enq_service: EnquiryService = services['enq']
+    project_service: ProjectService = services['project']
+    user_repo: IUserRepository = services['user']
+    managed_names = {p.project_name for p in project_service.get_projects_by_manager(manager.nric)}
+    relevant = []
+    if not managed_names: return relevant
+    for enq in enq_service.get_all_enquiries():
+        if enq.project_name in managed_names:
+            applicant = user_repo.find_user_by_nric(enq.applicant_nric)
+            applicant_name = applicant.name if applicant else "Unknown"
+            relevant.append((enq, applicant_name))
+    return relevant
+
+class ViewReplyEnquiriesManagerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBManager] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+        project_service: ProjectService = services['project']
+
+        relevant_data = _get_enquiries_for_manager(current_user, services)
+        if not relevant_data:
+            base_view.display_message("No enquiries found for the projects you manage.")
+            return None
+
+        unreplied = [e for e, name in relevant_data if not e.is_replied()]
+        base_view.display_message("Enquiries for Projects You Manage:", info=True)
+        for enquiry, applicant_name in relevant_data:
+             project = project_service.find_project_by_name(enquiry.project_name)
+             p_name = project.project_name if project else f"Unknown/Deleted ({enquiry.project_name})"
+             enq_view.display_enquiry_details(enquiry, p_name, applicant_name)
+
+        if not unreplied:
+            base_view.display_message("\nNo unreplied enquiries requiring action.")
+            return None
+
+        if InputUtil.get_yes_no_input("\nReply to an unreplied enquiry?"):
+            enquiry_to_reply = enq_view.select_enquiry(unreplied, action_verb="reply to")
+            if enquiry_to_reply:
+                reply_text = enq_view.prompt_reply_text()
+                if reply_text:
+                    enq_service.reply_to_enquiry(current_user, enquiry_to_reply, reply_text)
+                    base_view.display_message(f"Reply submitted for Enquiry ID {enquiry_to_reply.enquiry_id}.", info=True)
+        return None
+----
+# File name: controller\actions\officer_actions.py
+from typing import Dict, Any, Optional, List, Tuple
+from controller.interfaces.iaction import IAction
+from service.project_service import ProjectService
+from service.application_service import ApplicationService
+from service.registration_service import RegistrationService
+from service.enquiry_service import EnquiryService
+from repository.interfaces.iuser_repository import IUserRepository
+from view.project_view import ProjectView
+from view.officer_view import OfficerView
+from view.enquiry_view import EnquiryView
+from view.base_view import BaseView
+from utils.input_util import InputUtil
+from common.enums import UserRole, ApplicationStatus
+from common.exceptions import OperationError, IntegrityError
+from model.hdb_officer import HDBOfficer
+from model.project import Project
+from model.registration import Registration
+from model.enquiry import Enquiry
+from model.application import Application
+from model.user import User # For applicant lookup
+
+# Inherit Applicant actions if Officer can do everything Applicant can
+from .applicant_actions import (
+    ViewProjectsApplicantAction, ApplyForProjectAction, ViewApplicationStatusAction,
+    RequestWithdrawalAction, SubmitEnquiryAction, ViewMyEnquiriesAction,
+    EditMyEnquiryAction, DeleteMyEnquiryAction
+)
+
+# Rename imported Applicant action for clarity if needed, or use as is
+ViewProjectsOfficerAction = ViewProjectsApplicantAction
+
+class RegisterForProjectOfficerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        reg_service: RegistrationService = services['reg']
+        project_service: ProjectService = services['project']
+        app_service: ApplicationService = services['app']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+
+        all_projects = project_service.get_all_projects()
+        my_regs = {reg.project_name for reg in reg_service.get_registrations_by_officer(current_user.nric)}
+        my_app_projects = {app.project_name for app in app_service.get_all_applications_by_applicant(current_user.nric)}
+
+        selectable = [
+            p for p in all_projects
+            if p.project_name not in my_regs and \
+               p.project_name not in my_app_projects and \
+               p.manager_nric != current_user.nric
+        ]
+        # Rely on service layer for final overlap check
+
+        project_to_register = project_view.select_project(selectable, action_verb="register for as Officer")
+        if not project_to_register: return None
+
+        reg_service.officer_register_for_project(current_user, project_to_register)
+        base_view.display_message(f"Registration submitted for '{project_to_register.project_name}'. Pending Manager approval.", info=True)
+        return None
+
+class ViewMyOfficerRegistrationsAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        reg_service: RegistrationService = services['reg']
+        project_service: ProjectService = services['project']
+        officer_view: OfficerView = views['officer']
+        base_view: BaseView = views['base']
+
+        my_regs = reg_service.get_registrations_by_officer(current_user.nric)
+        if not my_regs:
+            base_view.display_message("You have no officer registrations.")
+            return None
+
+        base_view.display_message("Your Officer Registrations:", info=True)
+        for reg in my_regs:
+            project = project_service.find_project_by_name(reg.project_name)
+            p_name = project.project_name if project else f"Unknown/Deleted ({reg.project_name})"
+            officer_view.display_registration_details(reg, p_name, current_user.name)
+        return None
+
+class ViewHandledProjectsOfficerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        project_service: ProjectService = services['project']
+        project_view: ProjectView = views['project']
+        base_view: BaseView = views['base']
+
+        handled_names = project_service.get_handled_project_names_for_officer(current_user.nric)
+        handled_projects = [p for p in project_service.get_all_projects() if p.project_name in handled_names]
+
+        if not handled_projects:
+            base_view.display_message("You are not currently assigned to handle any projects.")
+            return None
+
+        base_view.display_message("Projects You Handle (Assigned):", info=True)
+        sorted_handled = sorted(handled_projects, key=lambda p: p.project_name)
+        for project in sorted_handled:
+             project_view.display_project_details(project, UserRole.HDB_OFFICER, current_user.marital_status)
+        return None
+
+# Helper for enquiry actions
+def _get_enquiries_for_officer(officer: HDBOfficer, services: Dict[str, Any]) -> List[Tuple[Enquiry, str]]:
+    enq_service: EnquiryService = services['enq']
+    project_service: ProjectService = services['project']
+    user_repo: IUserRepository = services['user']
+    handled_names = project_service.get_handled_project_names_for_officer(officer.nric)
+    relevant = []
+    if not handled_names: return relevant
+    for enq in enq_service.get_all_enquiries():
+        if enq.project_name in handled_names:
+            applicant = user_repo.find_user_by_nric(enq.applicant_nric)
+            applicant_name = applicant.name if applicant else "Unknown"
+            relevant.append((enq, applicant_name))
+    return relevant
+
+class ViewReplyEnquiriesOfficerAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        enq_service: EnquiryService = services['enq']
+        enq_view: EnquiryView = views['enq']
+        base_view: BaseView = views['base']
+
+        relevant_data = _get_enquiries_for_officer(current_user, services)
+        if not relevant_data:
+            base_view.display_message("No enquiries found for the projects you handle.")
+            return None
+
+        unreplied = [e for e, name in relevant_data if not e.is_replied()]
+        base_view.display_message("Enquiries for Projects You Handle:", info=True)
+        for enquiry, applicant_name in relevant_data:
+            enq_view.display_enquiry_details(enquiry, enquiry.project_name, applicant_name)
+
+        if not unreplied:
+            base_view.display_message("\nNo unreplied enquiries requiring action.")
+            return None
+
+        if InputUtil.get_yes_no_input("\nReply to an unreplied enquiry?"):
+            enquiry_to_reply = enq_view.select_enquiry(unreplied, action_verb="reply to")
+            if enquiry_to_reply:
+                reply_text = enq_view.prompt_reply_text()
+                if reply_text:
+                    enq_service.reply_to_enquiry(current_user, enquiry_to_reply, reply_text)
+                    base_view.display_message(f"Reply submitted for Enquiry ID {enquiry_to_reply.enquiry_id}.", info=True)
+        return None
+
+# Helper for booking/receipt actions
+def _prepare_receipt_data(application: Application, project: Project, applicant: User) -> dict:
+    return {
+        "Applicant Name": applicant.name, "NRIC": applicant.nric, "Age": applicant.age,
+        "Marital Status": applicant.marital_status,
+        "Flat Type Booked": application.flat_type.to_string(),
+        "Project Name": project.project_name, "Neighborhood": project.neighborhood,
+        "Booking Status": application.status.value
+    }
+
+class BookFlatAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        user_repo: IUserRepository = services['user']
+        officer_view: OfficerView = views['officer']
+        base_view: BaseView = views['base']
+
+        applicant_nric = officer_view.prompt_applicant_nric(purpose="booking flat")
+        if not applicant_nric: return None
+
+        applicant = user_repo.find_user_by_nric(applicant_nric)
+        if not applicant: raise OperationError(f"Applicant {applicant_nric} not found.")
+
+        application = app_service.find_application_by_applicant(applicant_nric)
+        if not application: raise OperationError(f"No active application found for {applicant_nric}.")
+        if application.status != ApplicationStatus.SUCCESSFUL:
+             raise OperationError(f"Application status is not '{ApplicationStatus.SUCCESSFUL.value}'. Cannot book.")
+
+        prompt = f"Confirm booking {application.flat_type.to_string()} in '{application.project_name}' for {applicant.name} ({applicant.nric})?"
+        if not InputUtil.get_yes_no_input(prompt):
+             base_view.display_message("Booking cancelled.")
+             return None
+
+        updated_project, booked_applicant = app_service.officer_book_flat(current_user, application)
+        base_view.display_message("Flat booked successfully! Unit count updated.", info=True)
+
+        receipt_data = _prepare_receipt_data(application, updated_project, booked_applicant)
+        officer_view.display_receipt(receipt_data)
+        return None
+
+class GenerateReceiptAction(IAction):
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[HDBOfficer] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        app_service: ApplicationService = services['app']
+        project_service: ProjectService = services['project']
+        user_repo: IUserRepository = services['user']
+        officer_view: OfficerView = views['officer']
+        base_view: BaseView = views['base']
+
+        applicant_nric = officer_view.prompt_applicant_nric(purpose="generating receipt")
+        if not applicant_nric: return None
+
+        applicant = user_repo.find_user_by_nric(applicant_nric)
+        if not applicant: raise OperationError(f"Applicant {applicant_nric} not found.")
+
+        booked_app = app_service.find_booked_application_by_applicant(applicant_nric) # Need specific method
+        if not booked_app: raise OperationError(f"No booked application found for {applicant_nric}.")
+
+        project = project_service.find_project_by_name(booked_app.project_name)
+        if not project: raise IntegrityError(f"Project '{booked_app.project_name}' not found.")
+
+        # Permission check (handled by service in book_flat, re-check here for generate)
+        handled_names = project_service.get_handled_project_names_for_officer(current_user.nric)
+        if project.project_name not in handled_names:
+            raise OperationError(f"You do not handle project '{project.project_name}'.")
+
+        receipt_data = _prepare_receipt_data(booked_app, project, applicant)
+        officer_view.display_receipt(receipt_data)
+        return None
+----
+# File name: controller\actions\__init__.py
+
+----
+# File name: controller\interfaces\iaction.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+
+class IAction(ABC):
+    """Interface for a command or action triggered by a menu choice."""
+
+    @abstractmethod
+    def execute(self, services: Dict[str, Any], views: Dict[str, Any], current_user: Optional[Any] = None, controller_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """
+        Executes the action.
+        Args:
+            services: Dictionary of available service instances.
+            views: Dictionary of available view instances.
+            current_user: The currently logged-in user object (if any).
+            controller_data: Optional dictionary for passing data between controller and action (e.g., filters).
+        Returns:
+            An optional string signal (e.g., "LOGOUT", "EXIT") or None to continue.
+        Raises:
+            OperationError, IntegrityError, etc. for business logic failures.
+        """
+        pass
+----
+# File name: controller\interfaces\__init__.py
+
+----
+# File name: repository\interfaces\iapplication_repository.py
+from abc import abstractmethod
+from typing import Optional, List
+from .ibase_repository import IBaseRepository
+from model.application import Application
+
+# Application key is string (composite ApplicantNRIC-ProjectName)
+class IApplicationRepository(IBaseRepository[Application, str]):
+    """Interface specific to Application data."""
+
+    @abstractmethod
+    def find_by_applicant_nric(self, nric: str) -> Optional[Application]:
+        """Finds the current non-unsuccessful application for an applicant."""
+        pass
+
+    @abstractmethod
+    def find_all_by_applicant_nric(self, nric: str) -> List[Application]:
+        """Finds all applications (including unsuccessful) for an applicant."""
+        pass
+
+    @abstractmethod
+    def find_by_project_name(self, project_name: str) -> List[Application]:
+        """Finds all applications associated with a specific project."""
+        pass
+----
+# File name: repository\interfaces\ibase_repository.py
+from abc import ABC, abstractmethod
+from typing import TypeVar, Generic, List, Any, Optional
+
+# Generic type variable for the model class
+T = TypeVar('T')
+# Generic type variable for the key type
+K = TypeVar('K')
+
+class IBaseRepository(Generic[T, K], ABC):
+    """
+    Abstract interface for basic repository operations (CRUD).
+    Generic over the Model type (T) and its Key type (K).
+    """
+
+    @abstractmethod
+    def get_all(self) -> List[T]:
+        """Returns a list of all items."""
+        pass
+
+    @abstractmethod
+    def find_by_key(self, key: K) -> Optional[T]:
+        """Finds an item by its primary key."""
+        pass
+
+    @abstractmethod
+    def add(self, item: T):
+        """Adds a new item. Raises IntegrityError if key exists."""
+        pass
+
+    @abstractmethod
+    def update(self, item: T):
+        """Updates an existing item. Raises IntegrityError if key not found."""
+        pass
+
+    @abstractmethod
+    def delete(self, key: K):
+        """Deletes an item by its primary key. Raises IntegrityError if key not found."""
+        pass
+
+    @abstractmethod
+    def save(self):
+        """Persists the current state of the repository's data to storage."""
+        pass
+
+    @abstractmethod
+    def load(self):
+        """Loads data from storage into the repository."""
+        pass
+----
+# File name: repository\interfaces\ienquiry_repository.py
+from abc import abstractmethod
+from typing import Optional, List
+from .ibase_repository import IBaseRepository
+from model.enquiry import Enquiry
+
+# Enquiry key is int (enquiry_id)
+class IEnquiryRepository(IBaseRepository[Enquiry, int]):
+    """Interface specific to Enquiry data."""
+
+    # find_by_key is inherited as find_by_id implicitly
+    @abstractmethod
+    def find_by_id(self, enquiry_id: int) -> Optional[Enquiry]:
+        """Alias for find_by_key for clarity."""
+        pass
+
+    @abstractmethod
+    def find_by_applicant(self, applicant_nric: str) -> List[Enquiry]:
+        """Finds all enquiries submitted by a specific applicant."""
+        pass
+
+    @abstractmethod
+    def find_by_project(self, project_name: str) -> List[Enquiry]:
+        """Finds all enquiries related to a specific project."""
+        pass
+
+    @abstractmethod
+    def delete_by_id(self, enquiry_id: int):
+        """Alias for delete for clarity."""
+        pass
+
+    @abstractmethod
+    def get_next_id(self) -> int:
+        """Gets the next available ID for a new enquiry."""
+        pass
+----
+# File name: repository\interfaces\iproject_repository.py
+from abc import abstractmethod
+from typing import Optional, List
+from .ibase_repository import IBaseRepository
+from model.project import Project
+
+class IProjectRepository(IBaseRepository[Project, str]):
+    """Interface specific to Project data."""
+
+    @abstractmethod
+    def find_by_name(self, name: str) -> Optional[Project]:
+        """Finds a project by its unique name."""
+        pass
+
+    @abstractmethod
+    def find_by_manager_nric(self, manager_nric: str) -> List[Project]:
+        """Finds all projects managed by a specific manager."""
+        pass
+
+----
+# File name: repository\interfaces\iregistration_repository.py
+from abc import abstractmethod
+from typing import Optional, List
+from .ibase_repository import IBaseRepository
+from model.registration import Registration
+from common.enums import RegistrationStatus
+
+# Registration key is string (composite OfficerNRIC-ProjectName)
+class IRegistrationRepository(IBaseRepository[Registration, str]):
+    """Interface specific to Registration data."""
+
+    @abstractmethod
+    def find_by_officer_and_project(self, officer_nric: str, project_name: str) -> Optional[Registration]:
+        """Finds a specific registration by officer and project."""
+        pass
+
+    @abstractmethod
+    def find_by_officer(self, officer_nric: str) -> List[Registration]:
+        """Finds all registrations for a specific officer."""
+        pass
+
+    @abstractmethod
+    def find_by_project(self, project_name: str, status_filter: Optional[RegistrationStatus] = None) -> List[Registration]:
+        """Finds registrations for a project, optionally filtered by status."""
+        pass
+----
+# File name: repository\interfaces\iuser_repository.py
+from abc import ABC, abstractmethod
+from typing import Optional, List
+from model.user import User
+
+class IUserRepository(ABC):
+    """Interface for accessing user data across all roles."""
+
+    @abstractmethod
+    def find_user_by_nric(self, nric: str) -> Optional[User]:
+        """Finds any user (Applicant, Officer, Manager) by NRIC."""
+        pass
+
+    @abstractmethod
+    def get_all_users(self) -> List[User]:
+        """Gets a list of all users from all roles."""
+        pass
+
+    @abstractmethod
+    def save_user(self, user: User):
+        """Saves changes to a specific user in the appropriate underlying repository."""
+        pass
+
+    @abstractmethod
+    def load_all_users(self):
+        """Loads users from all underlying repositories."""
+        pass
+
+    @abstractmethod
+    def save_all_user_types(self):
+        """Saves data for all underlying user repositories."""
+        pass
+----
+# File name: repository\interfaces\__init__.py
+
+----
+# File name: repository\storage\csv_storage_adapter.py
+import os
+from typing import List, Dict, Tuple, Any
+from .istorage_adapter import IStorageAdapter
+from common.exceptions import DataLoadError, DataSaveError
+
+class CsvStorageAdapter(IStorageAdapter):
+    """Implements storage adapter using simple CSV file handling."""
+
+    @staticmethod
+    def _parse_csv_line(line: str) -> List[str]:
+        """Parses a single CSV line, handling basic quoting."""
+        fields = []
+        current_field = ''
+        in_quotes = False
+        i = 0
+        while i < len(line):
+            char = line[i]
+            if char == '"':
+                if in_quotes and i + 1 < len(line) and line[i+1] == '"':
+                    current_field += '"' # Handle escaped quote ("")
+                    i += 1
+                else:
+                    in_quotes = not in_quotes
+            elif char == ',' and not in_quotes:
+                fields.append(current_field)
+                current_field = ''
+            else:
+                current_field += char
+            i += 1
+        fields.append(current_field) # Add the last field
+        return fields
+
+    @staticmethod
+    def _format_csv_field(field_value: Any) -> str:
+        """Formats a single field for CSV, adding quotes if necessary."""
+        str_value = str(field_value)
+        if ',' in str_value or '"' in str_value or '\n' in str_value:
+            return '"' + str_value.replace('"', '""') + '"'
+        return str_value
+
+    @staticmethod
+    def _format_csv_row(row_values: List[Any]) -> str:
+        """Formats a list of values into a CSV row string."""
+        return ','.join(CsvStorageAdapter._format_csv_field(field) for field in row_values)
+
+    def read_data(self, source_id: str, expected_headers: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Reads data from a CSV file."""
+        file_path = source_id
+        if not os.path.exists(file_path):
+            print(f"Warning: Data file not found: {file_path}. Creating empty file with headers.")
+            try:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True) # Ensure directory exists
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(self._format_csv_row(expected_headers) + '\n')
+                return [], list(expected_headers) # Return empty data and expected headers
+            except IOError as e:
+                raise DataLoadError(f"Error creating data file {file_path}: {e}")
+
+        data = []
+        headers = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                header_line = f.readline().strip()
+                if not header_line:
+                    print(f"Warning: Data file {file_path} is empty. Using expected headers.")
+                    with open(file_path, 'w', encoding='utf-8') as fw:
+                         fw.write(self._format_csv_row(expected_headers) + '\n')
+                    return [], list(expected_headers)
+
+                headers = self._parse_csv_line(header_line)
+                if not all(h in headers for h in expected_headers):
+                    missing = [h for h in expected_headers if h not in headers]
+                    extra = [h for h in headers if h not in expected_headers]
+                    msg = f"Invalid headers in {file_path}. Expected: {expected_headers}. Found: {headers}."
+                    if missing: msg += f" Missing: {missing}."
+                    if extra: msg += f" Extra: {extra}."
+                    raise DataLoadError(msg)
+
+                header_map = {h: i for i, h in enumerate(headers)}
+                for i, line in enumerate(f):
+                    line = line.strip()
+                    if not line: continue
+                    row_values = self._parse_csv_line(line)
+                    if len(row_values) != len(headers):
+                         print(f"Warning: Skipping malformed row {i+2} in {file_path}. Fields: {len(row_values)}, Headers: {len(headers)}. Line: '{line}'")
+                         continue
+
+                    row_dict = {}
+                    valid_row = True
+                    # Use actual headers found for creating dict, but ensure expected ones exist
+                    for req_h in expected_headers:
+                        if req_h not in header_map:
+                             print(f"Warning: Missing expected column '{req_h}' in header map for row {i+2} of {file_path}. Skipping row.")
+                             valid_row = False
+                             break
+                        try:
+                            idx = header_map[req_h]
+                            row_dict[req_h] = row_values[idx]
+                        except IndexError:
+                            print(f"Warning: Index error accessing column '{req_h}' (index {idx}) in row {i+2} of {file_path}. Skipping row.")
+                            valid_row = False
+                            break
+                    if valid_row:
+                        data.append(row_dict)
+
+        except FileNotFoundError: # Should be handled by os.path.exists now
+             raise DataLoadError(f"File not found: {file_path}")
+        except IOError as e:
+            raise DataLoadError(f"Error reading data file {file_path}: {e}")
+        except Exception as e:
+            raise DataLoadError(f"Unexpected error reading CSV {file_path}: {e}")
+
+        return data, headers # Return actual headers read
+
+    def write_data(self, source_id: str, headers: List[str], data_dicts: List[Dict[str, Any]]):
+        """Writes data to a CSV file."""
+        file_path = source_id
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True) # Ensure directory exists
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(self._format_csv_row(headers) + '\n')
+                for row_dict in data_dicts:
+                    row_values = [row_dict.get(header, '') for header in headers]
+                    f.write(self._format_csv_row(row_values) + '\n')
+        except IOError as e:
+            raise DataSaveError(f"Error writing data to {file_path}: {e}")
+        except Exception as e:
+            raise DataSaveError(f"Unexpected error writing CSV {file_path}: {e}")
+----
+# File name: repository\storage\istorage_adapter.py
+from abc import ABC, abstractmethod
+from typing import List, Dict, Tuple, Any
+
+class IStorageAdapter(ABC):
+    """Interface for reading and writing data from/to a persistent storage."""
+
+    @abstractmethod
+    def read_data(self, source_id: str, expected_headers: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """
+        Reads data from the specified source.
+        Args:
+            source_id: Identifier for the data source (e.g., file path).
+            expected_headers: List of headers expected in the source.
+        Returns:
+            A tuple containing:
+            - List of dictionaries representing the data rows.
+            - The actual headers found in the source.
+        Raises:
+            DataLoadError: If the source cannot be read or headers are invalid.
+            FileNotFoundError: If the source does not exist (implementations may handle creation).
+        """
+        pass
+
+    @abstractmethod
+    def write_data(self, source_id: str, headers: List[str], data_dicts: List[Dict[str, Any]]):
+        """
+        Writes data to the specified source.
+        Args:
+            source_id: Identifier for the data source (e.g., file path).
+            headers: The list of headers to write.
+            data_dicts: A list of dictionaries representing the data rows.
+        Raises:
+            DataSaveError: If the data cannot be written.
+        """
+        pass
+----
+# File name: repository\storage\__init__.py
+
+----
+# File name: service\interfaces\iapplication_service.py
+from abc import ABC, abstractmethod
+from typing import List, Optional, Tuple
+from model.application import Application
+from model.applicant import Applicant
+from model.hdb_officer import HDBOfficer
+from model.hdb_manager import HDBManager
+from model.project import Project
+from common.enums import FlatType
+
+class IApplicationService(ABC):
+    """Interface for application-related business logic."""
+
+    @abstractmethod
+    def find_application_by_applicant(self, applicant_nric: str) -> Optional[Application]:
+        pass
+
+    @abstractmethod
+    def find_booked_application_by_applicant(self, applicant_nric: str) -> Optional[Application]:
+        pass
+
+    @abstractmethod
+    def get_all_applications_by_applicant(self, applicant_nric: str) -> List[Application]:
+        pass
+
+    @abstractmethod
+    def get_applications_for_project(self, project_name: str) -> List[Application]:
+        pass
+
+    @abstractmethod
+    def get_all_applications(self) -> List[Application]:
+        pass
+
+    @abstractmethod
+    def apply_for_project(self, applicant: Applicant, project: Project, flat_type: FlatType) -> Application:
+        pass
+
+    @abstractmethod
+    def request_withdrawal(self, application: Application):
+        pass
+
+    @abstractmethod
+    def manager_approve_application(self, manager: HDBManager, application: Application):
+        pass
+
+    @abstractmethod
+    def manager_reject_application(self, manager: HDBManager, application: Application):
+        pass
+
+    @abstractmethod
+    def manager_approve_withdrawal(self, manager: HDBManager, application: Application):
+        pass
+
+    @abstractmethod
+    def manager_reject_withdrawal(self, manager: HDBManager, application: Application):
+        pass
+
+    @abstractmethod
+    def officer_book_flat(self, officer: HDBOfficer, application: Application) -> Tuple[Project, Applicant]: # Return updated project and applicant
+        pass
+----
+# File name: service\interfaces\iauth_service.py
+from abc import ABC, abstractmethod
+from typing import Optional
+from model.user import User
+from common.enums import UserRole
+
+class IAuthService(ABC):
+    """Interface for authentication and user management services."""
+
+    @abstractmethod
+    def login(self, nric: str, password: str) -> User:
+        """
+        Attempts to log in a user.
+        Returns the User object on success.
+        Raises OperationError on failure (NRIC not found, wrong password, invalid format).
+        """
+        pass
+
+    @abstractmethod
+    def change_password(self, user: User, new_password: str):
+        """
+        Changes the password for the given user.
+        Raises OperationError if validation fails or save fails.
+        """
+        pass
+
+    @abstractmethod
+    def get_user_role(self, user: User) -> UserRole:
+        """Gets the role of the user."""
+        pass
+----
+# File name: service\interfaces\ienquiry_service.py
+from abc import ABC, abstractmethod
+from typing import List, Optional
+from model.enquiry import Enquiry
+from model.applicant import Applicant
+from model.user import User # For replier
+from model.project import Project
+
+class IEnquiryService(ABC):
+    """Interface for enquiry-related business logic."""
+
+    @abstractmethod
+    def find_enquiry_by_id(self, enquiry_id: int) -> Optional[Enquiry]:
+        pass
+
+    @abstractmethod
+    def get_enquiries_by_applicant(self, applicant_nric: str) -> List[Enquiry]:
+        pass
+
+    @abstractmethod
+    def get_enquiries_for_project(self, project_name: str) -> List[Enquiry]:
+        pass
+
+    @abstractmethod
+    def get_all_enquiries(self) -> List[Enquiry]:
+        pass
+
+    @abstractmethod
+    def submit_enquiry(self, applicant: Applicant, project: Project, text: str) -> Enquiry:
+        pass
+
+    @abstractmethod
+    def edit_enquiry(self, applicant: Applicant, enquiry: Enquiry, new_text: str):
+        pass
+
+    @abstractmethod
+    def delete_enquiry(self, applicant: Applicant, enquiry: Enquiry):
+        pass
+
+    @abstractmethod
+    def reply_to_enquiry(self, replier_user: User, enquiry: Enquiry, reply_text: str):
+        pass
+----
+# File name: service\interfaces\iproject_service.py
+from abc import ABC, abstractmethod
+from typing import List, Optional, Dict, Set
+from datetime import date
+from model.project import Project
+from model.hdb_manager import HDBManager
+from model.applicant import Applicant
+from model.application import Application # For viewable check
+
+class IProjectService(ABC):
+    """Interface for project-related business logic."""
+
+    @abstractmethod
+    def find_project_by_name(self, name: str) -> Optional[Project]:
+        pass
+
+    @abstractmethod
+    def get_all_projects(self) -> List[Project]:
+        pass
+
+    @abstractmethod
+    def get_projects_by_manager(self, manager_nric: str) -> List[Project]:
+        pass
+
+    @abstractmethod
+    def get_handled_project_names_for_officer(self, officer_nric: str) -> Set[str]:
+        pass
+
+    @abstractmethod
+    def get_viewable_projects_for_applicant(self, applicant: Applicant, current_application: Optional[Application] = None) -> List[Project]:
+        pass
+
+    @abstractmethod
+    def filter_projects(self, projects: List[Project], location: Optional[str] = None, flat_type_str: Optional[str] = None) -> List[Project]:
+        pass
+
+    @abstractmethod
+    def create_project(self, manager: HDBManager, name: str, neighborhood: str, n1: int, p1: int, n2: int, p2: int, od: date, cd: date, slot: int) -> Project:
+        pass
+
+    @abstractmethod
+    def edit_project(self, manager: HDBManager, project: Project, updates: Dict):
+        pass
+
+    @abstractmethod
+    def delete_project(self, manager: HDBManager, project: Project):
+        pass
+
+    @abstractmethod
+    def toggle_project_visibility(self, manager: HDBManager, project: Project) -> str: # Returns "ON" or "OFF"
+        pass
+
+    @abstractmethod
+    def add_officer_to_project(self, project: Project, officer_nric: str) -> bool:
+        pass
+
+    @abstractmethod
+    def remove_officer_from_project(self, project: Project, officer_nric: str) -> bool:
+        pass
+----
+# File name: service\interfaces\iregistration_service.py
+from abc import ABC, abstractmethod
+from typing import List, Optional
+from model.registration import Registration
+from model.hdb_officer import HDBOfficer
+from model.hdb_manager import HDBManager
+from model.project import Project
+from common.enums import RegistrationStatus
+
+class IRegistrationService(ABC):
+    """Interface for officer registration business logic."""
+
+    @abstractmethod
+    def find_registration(self, officer_nric: str, project_name: str) -> Optional[Registration]:
+        pass
+
+    @abstractmethod
+    def get_registrations_by_officer(self, officer_nric: str) -> List[Registration]:
+        pass
+
+    @abstractmethod
+    def get_registrations_for_project(self, project_name: str, status_filter: Optional[RegistrationStatus] = None) -> List[Registration]:
+        pass
+
+    @abstractmethod
+    def officer_register_for_project(self, officer: HDBOfficer, project: Project) -> Registration:
+        pass
+
+    @abstractmethod
+    def manager_approve_officer_registration(self, manager: HDBManager, registration: Registration):
+        pass
+
+    @abstractmethod
+    def manager_reject_officer_registration(self, manager: HDBManager, registration: Registration):
+        pass
+----
+# File name: service\interfaces\ireport_service.py
+from abc import ABC, abstractmethod
+from typing import List, Dict, Optional
+
+class IReportService(ABC):
+    """Interface for report generation services."""
+
+    @abstractmethod
+    def generate_booking_report_data(self, filter_project_name: Optional[str] = None,
+                                     filter_flat_type_str: Optional[str] = None,
+                                     filter_marital: Optional[str] = None) -> List[Dict]:
+        """Generates data for the booking report based on filters."""
+        pass
+----
+# File name: service\interfaces\__init__.py
+
+----

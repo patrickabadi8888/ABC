@@ -2,6 +2,10 @@ import os
 from datetime import datetime, date
 from abc import ABC, abstractmethod
 from enum import Enum
+<<<<<<< HEAD
+=======
+import copy # Used for deep copying objects if needed, though avoiding complex state mutation is better.
+>>>>>>> a2cb565acd1ca52aca4dfe23dbf79c24a75fdf98
 
 # ==============================================================================
 # == UTILS / HELPERS ==
