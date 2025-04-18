@@ -30,12 +30,14 @@ class BaseView:
             return None
 
         valid_indices = []
+        offset = 0
         for i, option in enumerate(options):
             if option.startswith("---"): # Handle separators
                 print(f"  {option}")
+                offset += 1
             else:
-                print(f"{i + 1}. {option}")
-                valid_indices.append(i + 1)
+                print(f"{i + 1 - offset}. {option}")
+                valid_indices.append(i + 1 - offset) # Store 1-based index of valid options
 
         print("--------------------")
 

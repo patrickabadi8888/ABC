@@ -33,6 +33,7 @@ class BaseRoleController(ABC):
 
     def run_menu(self) -> Optional[str]:
         """Displays the menu for the role and handles the selected action."""
+        
         base_view: BaseView = self._views['base']
 
         menu_options = [item[0] for item in self._menu_definition]
@@ -63,8 +64,6 @@ class BaseRoleController(ABC):
                  base_view.display_message("\nOperation cancelled by user.")
             except Exception as e:
                  base_view.display_message(f"An unexpected error occurred: {e}", error=True)
-                 import traceback
-                 traceback.print_exc() # Log full trace for debugging
         elif menu_options[choice_index - 1].startswith("---"):
              pass # Ignore separator selection
         else:

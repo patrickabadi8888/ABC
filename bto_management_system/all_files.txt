@@ -34,7 +34,6 @@ s = ''
 for filename in glob.glob('*.py') + glob.glob('*/**/*.py'):
     if filename == "__init__.py":
         continue
-    print(filename)
     s += f'# File name: {filename}\n'
     
     with open(filename, 'r') as f:

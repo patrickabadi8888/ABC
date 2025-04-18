@@ -54,8 +54,6 @@ class ApplicationController:
             exit(1)
         except Exception as e:
             BaseView().display_message(f"UNEXPECTED CRITICAL ERROR during initialization: {e}. Cannot start.", error=True)
-            import traceback
-            traceback.print_exc()
             exit(1)
 
     def _initialize_dependencies(self):
@@ -126,6 +124,17 @@ class ApplicationController:
                     signal = self._role_controller.run_menu()
                     if signal == "LOGOUT": self._handle_logout()
                     elif signal == "EXIT": self._shutdown(); break
+
+                    if self._persistence_manager:
+                        try:
+                            self._persistence_manager.save_all()
+                        except DataSaveError as e:
+                            base_view.display_message(f"ERROR during final data save:\n{e}", error=True)
+                        except Exception as e:
+                            base_view.display_message(f"Unexpected error during final data save: {e}", error=True)
+                    else:
+                        base_view.display_message("Warning: Persistence Manager not available for final save.", warning=True)
+                    
                 else:
                     base_view.display_message("Error: No role controller active. Logging out.", error=True)
                     self._handle_logout()
@@ -175,13 +184,5 @@ class ApplicationController:
         """Handles application shutdown, including saving data."""
         base_view = self._views['base']
         base_view.display_message("Exiting BTO Management System...")
-        if self._persistence_manager:
-            try:
-                self._persistence_manager.save_all()
-            except DataSaveError as e:
-                 base_view.display_message(f"ERROR during final data save:\n{e}", error=True)
-            except Exception as e:
-                 base_view.display_message(f"Unexpected error during final data save: {e}", error=True)
-        else:
-            base_view.display_message("Warning: Persistence Manager not available for final save.", warning=True)
+
         base_view.display_message("Goodbye!")

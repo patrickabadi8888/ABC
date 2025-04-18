@@ -38,7 +38,6 @@ class PersistenceManager:
 
     def save_all(self):
         """Saves data for all managed repositories."""
-        print("\nSaving all data...")
         errors = []
         for repo in self._repositories:
             try:
@@ -51,5 +50,3 @@ class PersistenceManager:
         if errors:
             # Combine errors into a single exception to signal failure
             raise DataSaveError("Errors occurred during data save:\n" + "\n".join(errors))
-        else:
-            print("All data saved successfully.")
