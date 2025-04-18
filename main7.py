@@ -630,13 +630,9 @@ class ProjectService:
                 continue
             if not project.is_currently_active_for_application():
                 continue
-
-            if applicant.marital_status == "Single" and project.num_units1 == 0:
+            if applicant.marital_status == "Single" and (project.num_units1 == 0 or applicant.age < 35):
                 continue
-            if applicant.marital_status == "Married" and project.num_units1 == 0 and project.num_units2 == 0:
-                continue
-
-            if applicant.marital_status == "Single" and applicant.age < 35:
+            if applicant.marital_status == "Married" and ((project.num_units1 == 0 and project.num_units2 == 0) or applicant.age < 21):
                 continue
             
             viewable.append(project)
