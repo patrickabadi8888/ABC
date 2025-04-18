@@ -25,7 +25,7 @@ class User:
         self.password = password
 
     def get_role(self):
-        pass
+        return "User"
 
 class Applicant(User):
     def __init__(self, name, nric, age, marital_status, password):
