@@ -24,21 +24,27 @@ class User:
         self.marital_status = marital_status
         self.password = password
 
-    def __eq__(self, other):
-        return self.nric == other.nric
+    def get_role(self):
+        pass
 
 class Applicant(User):
     def __init__(self, name, nric, age, marital_status, password):
         super().__init__(name, nric, age, marital_status, password)
+    def get_role(self):
+        return "Applicant"
 
 class HDBOfficer(Applicant):
     def __init__(self, name, nric, age, marital_status, password):
         super().__init__(name, nric, age, marital_status, password)
 
+    def get_role(self):
+        return "HDB Officer"
 class HDBManager(User):
     def __init__(self, name, nric, age, marital_status, password):
         super().__init__(name, nric, age, marital_status, password)
-
+    
+    def get_role(self):
+        return "HDB Manager"
 class Project:
     def __init__(self, project_name, neighborhood, type1, num_units1, price1,
                  type2, num_units2, price2, opening_date, closing_date,
@@ -693,13 +699,7 @@ class AuthService:
              raise OperationError(f"Failed to save new password: {e}")
 
     def get_user_role(self, user: User):
-        if isinstance(user, HDBManager):
-            return "HDB Manager"
-        elif isinstance(user, HDBOfficer):
-            return "HDB Officer"
-        elif isinstance(user, Applicant):
-            return "Applicant"
-        return "Unknown"
+        return user.get_role()
 
 class ProjectService:
     def __init__(self, project_repository: ProjectRepository,
