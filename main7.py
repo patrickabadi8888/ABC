@@ -628,7 +628,6 @@ class ProjectService:
             if is_project_applied_for:
                 viewable.append(project)
                 continue
-
             if not project.is_currently_active_for_application():
                 continue
 
@@ -637,6 +636,9 @@ class ProjectService:
             if applicant.marital_status == "Married" and project.num_units1 == 0 and project.num_units2 == 0:
                 continue
 
+            if applicant.marital_status == "Single" and applicant.age < 35:
+                continue
+            
             viewable.append(project)
 
         return sorted(list({p.project_name: p for p in viewable}.values()), key=lambda p: p.project_name)
