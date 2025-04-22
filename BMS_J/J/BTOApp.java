@@ -1682,9 +1682,9 @@ abstract class BaseController {
 
          System.out.println("\n--- " + prompt + " ---");
          System.out.println("Current Filters: Location=" + (filterLocation == null ? "Any" : filterLocation) + ", FlatType=" + (filterFlatType == null ? "Any" : filterFlatType));
-         System.out.println("------------------------------------------------------------------------------------------");
+         System.out.println("--------------------------------------------------------------------------------------------------------------------");
          System.out.printf("%-3s %-15s %-12s %-10s %-10s %-8s %-25s\n", "#", "Project Name", "Neighborhood", "Open", "Close", "Visible", "Flat Types (Available/Total, Price, Eligibility)");
-         System.out.println("------------------------------------------------------------------------------------------");
+         System.out.println("--------------------------------------------------------------------------------------------------------------------");
 
          for (int i = 0; i < projectList.size(); i++) {
              Project p = projectList.get(i);
@@ -1725,7 +1725,7 @@ abstract class BaseController {
              if (i < projectList.size() - 1) System.out.println("---"); // Separator between projects
 
          }
-         System.out.println("------------------------------------------------------------------------------------------");
+         System.out.println("--------------------------------------------------------------------------------------------------------------------");
      }
 
      // Prompts user to select a project from the displayed list

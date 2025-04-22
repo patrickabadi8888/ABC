@@ -1,35 +1,35 @@
-- [ ] **1. Valid User Login**  
+- [x] **1. Valid User Login**  
   - Expected: User can access their dashboard based on their roles  
   - Failure: User cannot log in or receives incorrect error messages
 
-- [ ] **2. Invalid NRIC Format**  
+- [x] **2. Invalid NRIC Format**  
   - Expected: User receives a notification about incorrect NRIC format  
   - Failure: User is allowed to log in with an invalid NRIC
 
-- [ ] **3. Incorrect Password**  
+- [x] **3. Incorrect Password**  
   - Expected: System denies access and alerts the user to incorrect password  
   - Failure: User logs in successfully with a wrong password
 
-- [ ] **4. Password Change Functionality**  
+- [x] **4. Password Change Functionality**  
   - Expected: System updates password, prompts re‑login, and allows login with new credentials  
   - Failure: System does not update the password or denies access with the new password
 
-- [ ] **5. Project Visibility Based on User Group and Toggle**  
+- [x] **5. Project Visibility Based on User Group and Toggle**  
   - Expected: Projects are visible only to users based on age, marital status, and the visibility setting  
   - Failure: Users see projects not relevant to their group or when visibility is off
 
-- [ ] **6. Project Application**  
+- [x] **6. Project Application**  
   - Expected: Users can apply only for projects relevant to their group or when visibility is on  
   - Failure: Users can apply for projects not relevant to their group or when visibility is off
 
-- [ ] **7. Viewing Application Status after Visibility Toggle Off**  
+- [x] **7. Viewing Application Status after Visibility Toggle Off**  
   - Expected: Applicants continue to access their application details regardless of visibility setting  
   - Failure: Application details become inaccessible once visibility is off
 
 - [ ] **8. Single Flat Booking per Successful Application**  
   - Expected: System allows booking one flat and restricts further bookings  
   - Failure: Applicant is able to book more than one flat
-
+  - Comments: Officers currently only can handle 1 project, should be can hand multiple projects as long as application dates don't overlap
 - [ ] **9. Applicant’s Enquiries Management**  
   - Expected: Enquiries can be submitted, displayed, modified, and removed successfully  
   - Failure: Enquiries cannot be submitted, edited, deleted, or do not display correctly
