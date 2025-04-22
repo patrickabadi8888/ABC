@@ -23,27 +23,6 @@ if __name__ == "__main__":
     app = ApplicationController()
     app.run()
 ----
-# File name: sum.py
-import glob
-
-# print all files and their contents in the format recursive
-# # File name
-#  File content
-# ----
-s = ''
-for filename in glob.glob('*.py') + glob.glob('*/**/*.py'):
-    if filename == "__init__.py":
-        continue
-    s += f'# File name: {filename}\n'
-    
-    with open(filename, 'r') as f:
-        content = f.read()
-        s += f'{content}\n'
-    s += '----\n'
-
-with open('all_files.txt', 'w') as f:
-    f.write(s)
-----
 # File name: controller\actions\applicant_actions.py
 from typing import Dict, Any, Optional, List
 from controller.interfaces.iaction import IAction
@@ -1578,5 +1557,3216 @@ class IReportService(ABC):
         pass
 ----
 # File name: service\interfaces\__init__.py
+
+----
+# File name: common\enums.py
+from enum import Enum
+
+class UserRole(Enum):
+    APPLICANT = "Applicant"
+    HDB_OFFICER = "HDB Officer"
+    HDB_MANAGER = "HDB Manager"
+
+class ApplicationStatus(Enum):
+    PENDING = "PENDING"
+    SUCCESSFUL = "SUCCESSFUL"
+    UNSUCCESSFUL = "UNSUCCESSFUL"
+    BOOKED = "BOOKED"
+
+class RegistrationStatus(Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+class FilePath(Enum):
+    # Store relative paths, assuming execution from project root
+    # Or configure absolute paths if needed
+    APPLICANT = 'data/ApplicantList.csv'
+    OFFICER = 'data/OfficerList.csv'
+    MANAGER = 'data/ManagerList.csv'
+    PROJECT = 'data/ProjectList.csv'
+    APPLICATION = 'data/ApplicationData.csv'
+    REGISTRATION = 'data/RegistrationData.csv'
+    ENQUIRY = 'data/EnquiryData.csv'
+
+class FlatType(Enum):
+    TWO_ROOM = 2
+    THREE_ROOM = 3
+
+    # Helper to get enum from value, useful for CSV loading
+    @classmethod
+    def from_value(cls, value):
+        try:
+            return cls(int(value))
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid value for FlatType: {value}")
+
+    # Helper to get descriptive string
+    def to_string(self):
+        return f"{self.value}-Room"
+----
+# File name: common\exceptions.py
+class DataLoadError(Exception):
+    """Error during data loading from storage."""
+    pass
+
+class DataSaveError(Exception):
+    """Error during data saving to storage."""
+    pass
+
+class IntegrityError(Exception):
+    """Data integrity violation (e.g., duplicate key, not found)."""
+    pass
+
+class OperationError(Exception):
+    """Error during a business logic operation (e.g., eligibility fail, invalid state)."""
+    pass
+
+class ConfigurationError(Exception):
+    """Error related to application configuration or setup."""
+    pass
+----
+# File name: common\__init__.py
+
+----
+# File name: controller\applicant_controller.py
+from typing import List, Tuple, Optional, Type
+from .base_role_controller import BaseRoleController
+from .interfaces.iaction import IAction
+from .actions.applicant_actions import (
+    ViewProjectsApplicantAction, ApplyForProjectAction, ViewApplicationStatusAction,
+    RequestWithdrawalAction, SubmitEnquiryAction, ViewMyEnquiriesAction,
+    EditMyEnquiryAction, DeleteMyEnquiryAction
+)
+
+class ApplicantController(BaseRoleController):
+    """Controller for Applicant users."""
+
+    def _build_menu(self):
+        self._menu_definition: List[Tuple[str, Optional[Type[IAction]]]] = [
+            ("View/Filter Projects", ViewProjectsApplicantAction),
+            ("Apply for Project", ApplyForProjectAction),
+            ("View My Application Status", ViewApplicationStatusAction),
+            ("Request Application Withdrawal", RequestWithdrawalAction),
+            ("--- Enquiries ---", None),
+            ("Submit Enquiry", SubmitEnquiryAction),
+            ("View My Enquiries", ViewMyEnquiriesAction),
+            ("Edit My Enquiry", EditMyEnquiryAction),
+            ("Delete My Enquiry", DeleteMyEnquiryAction),
+            *self._get_common_menu_items() # Add common actions at the end
+        ]
+----
+# File name: controller\application_controller.py
+from typing import Dict, Any, Optional
+from model.user import User
+from common.enums import UserRole
+from common.exceptions import DataLoadError, DataSaveError, IntegrityError, ConfigurationError, OperationError
+from repository.storage.csv_storage_adapter import CsvStorageAdapter
+from repository.applicant_repository import ApplicantRepository
+from repository.officer_repository import OfficerRepository
+from repository.manager_repository import ManagerRepository
+from repository.user_repository_facade import UserRepositoryFacade
+from repository.project_repository import ProjectRepository
+from repository.application_repository import ApplicationRepository
+from repository.registration_repository import RegistrationRepository
+from repository.enquiry_repository import EnquiryRepository
+from repository.persistence_manager import PersistenceManager
+# Import Services (adjust path based on final structure)
+from service.auth_service import AuthService
+from service.project_service import ProjectService
+from service.registration_service import RegistrationService
+from service.application_service import ApplicationService
+from service.enquiry_service import EnquiryService
+from service.report_service import ReportService
+# Import Views (adjust path)
+from view.base_view import BaseView
+from view.auth_view import AuthView
+from view.project_view import ProjectView
+from view.application_view import ApplicationView
+from view.enquiry_view import EnquiryView
+from view.officer_view import OfficerView
+from view.manager_view import ManagerView
+from view.report_view import ReportView
+# Import Role Controllers
+from .base_role_controller import BaseRoleController
+from .applicant_controller import ApplicantController
+from .officer_controller import OfficerController
+from .manager_controller import ManagerController
+from utils.input_util import InputUtil # For login retry prompt
+
+class ApplicationController:
+    """Main controller orchestrating the application lifecycle."""
+    def __init__(self):
+        self._services: Dict[str, Any] = {}
+        self._views: Dict[str, Any] = {}
+        self._repositories: Dict[str, Any] = {} # Store repositories if needed elsewhere
+        self._persistence_manager: Optional[PersistenceManager] = None
+        self._current_user: Optional[User] = None
+        self._role_controller: Optional[BaseRoleController] = None
+
+        try:
+            self._initialize_dependencies()
+            self._load_initial_data()
+        except (DataLoadError, DataSaveError, IntegrityError, ConfigurationError) as e:
+            # Use BaseView directly for initialization errors
+            BaseView().display_message(f"CRITICAL ERROR during initialization: {e}. Cannot start.", error=True)
+            exit(1)
+        except Exception as e:
+            BaseView().display_message(f"UNEXPECTED CRITICAL ERROR during initialization: {e}. Cannot start.", error=True)
+            exit(1)
+
+    def _initialize_dependencies(self):
+        """Sets up repositories, services, views, and persistence manager."""
+        # Storage Adapter
+        storage_adapter = CsvStorageAdapter()
+
+        # Repositories
+        applicant_repo = ApplicantRepository(storage_adapter)
+        officer_repo = OfficerRepository(storage_adapter)
+        manager_repo = ManagerRepository(storage_adapter)
+        user_repo_facade = UserRepositoryFacade(applicant_repo, officer_repo, manager_repo)
+        project_repo = ProjectRepository(storage_adapter)
+        app_repo = ApplicationRepository(storage_adapter)
+        reg_repo = RegistrationRepository(storage_adapter)
+        enq_repo = EnquiryRepository(storage_adapter)
+
+        # Store repositories if needed by other layers (e.g., views needing user repo)
+        self._repositories['applicant'] = applicant_repo
+        self._repositories['officer'] = officer_repo
+        self._repositories['manager'] = manager_repo
+        self._repositories['user'] = user_repo_facade # Facade for general user access
+        self._repositories['project'] = project_repo
+        self._repositories['application'] = app_repo
+        self._repositories['registration'] = reg_repo
+        self._repositories['enquiry'] = enq_repo
+
+        # Persistence Manager (collect all base repositories)
+        all_repos = [applicant_repo, officer_repo, manager_repo, project_repo, app_repo, reg_repo, enq_repo]
+        self._persistence_manager = PersistenceManager(all_repos)
+
+        # Services (inject repository dependencies)
+        self._services['auth'] = AuthService(user_repo_facade)
+        self._services['project'] = ProjectService(project_repo, reg_repo) # Pass needed repos
+        self._services['reg'] = RegistrationService(reg_repo, self._services['project'], app_repo)
+        self._services['app'] = ApplicationService(app_repo, self._services['project'], self._services['reg'], user_repo_facade)
+        self._services['enq'] = EnquiryService(enq_repo, self._services['project'], user_repo_facade, app_repo)
+        self._services['report'] = ReportService(app_repo, self._services['project'], user_repo_facade)
+        # Add user repo to services if actions need it directly (try to avoid)
+        self._services['user'] = user_repo_facade
+
+        # Views
+        self._views['base'] = BaseView()
+        self._views['auth'] = AuthView()
+        self._views['project'] = ProjectView()
+        self._views['app'] = ApplicationView()
+        self._views['enq'] = EnquiryView()
+        self._views['officer'] = OfficerView()
+        self._views['manager'] = ManagerView()
+        self._views['report'] = ReportView()
+
+    def _load_initial_data(self):
+        """Loads data using the PersistenceManager."""
+        if self._persistence_manager:
+            self._persistence_manager.load_all()
+        else:
+            raise ConfigurationError("Persistence Manager not initialized.")
+
+    def run(self):
+        """Main application loop."""
+        base_view = self._views['base']
+        while True:
+            if not self._current_user:
+                if not self._handle_login():
+                    break # Exit if login fails and user quits
+            else:
+                if self._role_controller:
+                    signal = self._role_controller.run_menu()
+                    if signal == "LOGOUT": self._handle_logout()
+                    elif signal == "EXIT": self._shutdown(); break
+
+                    if self._persistence_manager:
+                        try:
+                            self._persistence_manager.save_all()
+                        except DataSaveError as e:
+                            base_view.display_message(f"ERROR during final data save:\n{e}", error=True)
+                        except Exception as e:
+                            base_view.display_message(f"Unexpected error during final data save: {e}", error=True)
+                    else:
+                        base_view.display_message("Warning: Persistence Manager not available for final save.", warning=True)
+                    
+                else:
+                    base_view.display_message("Error: No role controller active. Logging out.", error=True)
+                    self._handle_logout()
+
+    def _handle_login(self) -> bool:
+        """Handles the login process."""
+        auth_service: AuthService = self._services['auth']
+        auth_view: AuthView = self._views['auth']
+        base_view: BaseView = self._views['base']
+
+        base_view.display_message("Welcome to the BTO Management System")
+        while True:
+            try:
+                nric, password = auth_view.prompt_login()
+                user = auth_service.login(nric, password) # Service returns User object
+                self._current_user = user
+                role = user.get_role()
+                base_view.display_message(f"Login successful. Welcome, {user.name} ({role.value})!", info=True)
+
+                # Instantiate the correct controller
+                if role == UserRole.HDB_MANAGER: self._role_controller = ManagerController(user, self._services, self._views)
+                elif role == UserRole.HDB_OFFICER: self._role_controller = OfficerController(user, self._services, self._views)
+                elif role == UserRole.APPLICANT: self._role_controller = ApplicantController(user, self._services, self._views)
+                else: raise ConfigurationError(f"Unknown user role '{role}' encountered.")
+
+                return True # Login successful
+
+            except (OperationError, ConfigurationError) as e:
+                base_view.display_message(str(e), error=True)
+                if not InputUtil.get_yes_no_input("Login failed. Try again?"):
+                    self._shutdown()
+                    return False # User chose to quit
+            except KeyboardInterrupt:
+                 base_view.display_message("\nLogin cancelled by user.")
+                 self._shutdown()
+                 return False
+
+    def _handle_logout(self):
+        """Handles the logout process."""
+        base_view = self._views['base']
+        if self._current_user:
+            base_view.display_message(f"Logging out user {self._current_user.name}.", info=True)
+        self._current_user = None
+        self._role_controller = None
+
+    def _shutdown(self):
+        """Handles application shutdown, including saving data."""
+        base_view = self._views['base']
+        base_view.display_message("Exiting BTO Management System...")
+
+        base_view.display_message("Goodbye!")
+----
+# File name: controller\base_role_controller.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, List, Tuple, Type
+from model.user import User
+from view.base_view import BaseView
+from common.exceptions import OperationError, IntegrityError
+from .interfaces.iaction import IAction
+from .actions.common_actions import ChangePasswordAction, LogoutAction, ExitAction, NoOpAction
+
+class BaseRoleController(ABC):
+    """Abstract base class for role-specific controllers using the Action pattern."""
+    def __init__(self, current_user: User, services: Dict[str, Any], views: Dict[str, Any]):
+        self._current_user = current_user
+        self._services = services
+        self._views = views
+        # Store shared data like filters here, passed to actions
+        self._controller_data = {'filters': {}}
+        # Menu definition: List of (Display String, Action Class or None for separator)
+        self._menu_definition: List[Tuple[str, Optional[Type[IAction]]]] = []
+        self._action_instances: Dict[Type[IAction], IAction] = {} # Cache action instances
+
+        self._build_menu() # Populate _menu_definition in subclasses
+
+    @abstractmethod
+    def _build_menu(self):
+        """Subclasses must implement this to define their menu structure."""
+        pass
+
+    def _get_action_instance(self, action_class: Type[IAction]) -> IAction:
+        """Gets or creates an instance of an action class."""
+        if action_class not in self._action_instances:
+            self._action_instances[action_class] = action_class() # Instantiate if not cached
+        return self._action_instances[action_class]
+
+    def run_menu(self) -> Optional[str]:
+        """Displays the menu for the role and handles the selected action."""
+        
+        base_view: BaseView = self._views['base']
+
+        menu_options = [item[0] for item in self._menu_definition]
+        action_map: Dict[int, Optional[IAction]] = {} # Map 1-based index to action instance
+        current_index = 1
+        for _, action_class in self._menu_definition:
+            if action_class:
+                action_map[current_index] = self._get_action_instance(action_class)
+                current_index += 1
+            else:
+                # Separators don't increment the choice index mapping
+                pass
+
+        # Display menu and get choice
+        choice_index = base_view.display_menu(f"{self._current_user.get_role().value} Menu", menu_options)
+        if choice_index is None: return None # Should not happen with validated input
+
+        # Find the corresponding action instance from the map
+        selected_action = action_map.get(choice_index)
+
+        if selected_action:
+            try:
+                # Execute the chosen action, passing necessary context
+                return selected_action.execute(self._services, self._views, self._current_user, self._controller_data)
+            except (OperationError, IntegrityError) as e:
+                base_view.display_message(str(e), error=True)
+            except KeyboardInterrupt:
+                 base_view.display_message("\nOperation cancelled by user.")
+            except Exception as e:
+                 base_view.display_message(f"An unexpected error occurred: {e}", error=True)
+        elif menu_options[choice_index - 1].startswith("---"):
+             pass # Ignore separator selection
+        else:
+             base_view.display_message("Invalid menu option selected.", error=True)
+
+        base_view.pause_for_user()
+        return None # Continue showing menu unless logout/exit signal received
+
+    def _get_common_menu_items(self) -> List[Tuple[str, Optional[Type[IAction]]]]:
+        """Returns standard menu items common to all logged-in users."""
+        return [
+            ("--- General Actions ---", None),
+            ("Change Password", ChangePasswordAction),
+            ("Logout", LogoutAction),
+            ("Exit System", ExitAction),
+        ]
+----
+# File name: controller\manager_controller.py
+from typing import List, Tuple, Optional, Type
+from .base_role_controller import BaseRoleController
+from .interfaces.iaction import IAction
+from .actions.manager_actions import (
+    CreateProjectAction, EditProjectAction, DeleteProjectAction, ToggleProjectVisibilityAction,
+    ViewAllProjectsManagerAction, ViewMyProjectsManagerAction, ViewOfficerRegistrationsAction,
+    ApproveOfficerRegistrationAction, RejectOfficerRegistrationAction, ViewApplicationsAction,
+    ApproveApplicationAction, RejectApplicationAction, ApproveWithdrawalAction, RejectWithdrawalAction,
+    GenerateBookingReportAction, ViewAllEnquiriesManagerAction, ViewReplyEnquiriesManagerAction
+)
+
+class ManagerController(BaseRoleController):
+    """Controller for HDB Manager users."""
+
+    def _build_menu(self):
+        self._menu_definition: List[Tuple[str, Optional[Type[IAction]]]] = [
+            ("--- Project Management ---", None),
+            ("Create Project", CreateProjectAction),
+            ("Edit Project", EditProjectAction),
+            ("Delete Project", DeleteProjectAction),
+            ("Toggle Project Visibility", ToggleProjectVisibilityAction),
+            ("View All/Filter Projects", ViewAllProjectsManagerAction),
+            ("View My Managed Projects", ViewMyProjectsManagerAction),
+            ("--- Officer Management ---", None),
+            ("View Officer Registrations (Project)", ViewOfficerRegistrationsAction),
+            ("Approve Officer Registration", ApproveOfficerRegistrationAction),
+            ("Reject Officer Registration", RejectOfficerRegistrationAction),
+            ("--- Application Management ---", None),
+            ("View Applications (Project)", ViewApplicationsAction),
+            ("Approve Application", ApproveApplicationAction),
+            ("Reject Application", RejectApplicationAction),
+            ("Approve Withdrawal Request", ApproveWithdrawalAction),
+            ("Reject Withdrawal Request", RejectWithdrawalAction),
+            ("--- Reporting & Enquiries ---", None),
+            ("Generate Booking Report", GenerateBookingReportAction),
+            ("View All Enquiries", ViewAllEnquiriesManagerAction),
+            ("View/Reply Enquiries (Managed Projects)", ViewReplyEnquiriesManagerAction),
+            *self._get_common_menu_items()
+        ]
+----
+# File name: controller\officer_controller.py
+from typing import List, Tuple, Optional, Type
+from .base_role_controller import BaseRoleController
+from .interfaces.iaction import IAction
+# Import both Applicant and Officer specific actions
+from .actions.applicant_actions import (
+    ViewProjectsApplicantAction, ApplyForProjectAction, ViewApplicationStatusAction,
+    RequestWithdrawalAction, SubmitEnquiryAction, ViewMyEnquiriesAction,
+    EditMyEnquiryAction, DeleteMyEnquiryAction
+)
+from .actions.officer_actions import (
+    RegisterForProjectOfficerAction, ViewMyOfficerRegistrationsAction,
+    ViewHandledProjectsOfficerAction, ViewReplyEnquiriesOfficerAction,
+    BookFlatAction, GenerateReceiptAction
+)
+
+class OfficerController(BaseRoleController): # Can inherit from ApplicantController if structure allows, or BaseRoleController
+    """Controller for HDB Officer users."""
+
+    def _build_menu(self):
+        # Officers have Applicant actions + their own
+        self._menu_definition: List[Tuple[str, Optional[Type[IAction]]]] = [
+            # Applicant Actions (reuse or alias)
+            ("View/Filter Projects", ViewProjectsApplicantAction), # Officer uses same view logic as Applicant
+            ("Apply for Project", ApplyForProjectAction),
+            ("View My Application Status", ViewApplicationStatusAction),
+            ("Request Application Withdrawal", RequestWithdrawalAction),
+            ("--- Enquiries (Personal) ---", None),
+            ("Submit Enquiry", SubmitEnquiryAction),
+            ("View My Enquiries", ViewMyEnquiriesAction),
+            ("Edit My Enquiry", EditMyEnquiryAction),
+            ("Delete My Enquiry", DeleteMyEnquiryAction),
+            # Officer Specific Actions
+            ("--- Officer Actions ---", None),
+            ("Register for Project as Officer", RegisterForProjectOfficerAction),
+            ("View My Officer Registrations", ViewMyOfficerRegistrationsAction),
+            ("View Handled Projects Details", ViewHandledProjectsOfficerAction),
+            ("View/Reply Enquiries (Handled Projects)", ViewReplyEnquiriesOfficerAction),
+            ("Book Flat for Applicant", BookFlatAction),
+            ("Generate Booking Receipt", GenerateReceiptAction),
+            # Common Actions
+            *self._get_common_menu_items()
+        ]
+----
+# File name: controller\__init__.py
+
+----
+# File name: model\applicant.py
+from .user import User
+from common.enums import UserRole
+
+class Applicant(User):
+    """Represents an applicant user."""
+    def __init__(self, name: str, nric: str, age: int, marital_status: str, password: str = "password"):
+        super().__init__(name, nric, age, marital_status, password)
+
+    def get_role(self) -> UserRole:
+        return UserRole.APPLICANT
+----
+# File name: model\application.py
+from utils.input_util import InputUtil
+from common.enums import FlatType, ApplicationStatus
+from common.exceptions import DataLoadError, OperationError
+
+class Application:
+    """Represents a BTO application."""
+    _HEADERS = ['ApplicantNRIC', 'ProjectName', 'FlatType', 'Status', 'RequestWithdrawal']
+
+    def __init__(self, applicant_nric: str, project_name: str, flat_type: FlatType,
+                 status: ApplicationStatus = ApplicationStatus.PENDING,
+                 request_withdrawal: bool = False):
+
+        if not InputUtil.validate_nric(applicant_nric): raise ValueError("Invalid Applicant NRIC")
+        if not project_name: raise ValueError("Project Name cannot be empty")
+        if not isinstance(flat_type, FlatType): raise ValueError("Invalid FlatType")
+        if not isinstance(status, ApplicationStatus): raise ValueError("Invalid ApplicationStatus")
+
+        self._applicant_nric = applicant_nric
+        self._project_name = project_name
+        self._flat_type = flat_type
+        self._status = status
+        self._request_withdrawal = bool(request_withdrawal)
+
+    # --- Getters ---
+    @property
+    def applicant_nric(self): return self._applicant_nric
+    @property
+    def project_name(self): return self._project_name
+    @property
+    def flat_type(self): return self._flat_type
+    @property
+    def status(self): return self._status
+    @property
+    def request_withdrawal(self): return self._request_withdrawal
+
+    # --- State Modifiers ---
+    def set_status(self, new_status: ApplicationStatus):
+        if not isinstance(new_status, ApplicationStatus):
+            raise ValueError("Invalid status provided.")
+        # Basic state transition validation (can be enhanced in Service layer)
+        # Allow setting to unsuccessful from any state if withdrawal approved
+        # Allow setting to current state
+        allowed = {
+            ApplicationStatus.PENDING: [ApplicationStatus.SUCCESSFUL, ApplicationStatus.UNSUCCESSFUL, ApplicationStatus.PENDING],
+            ApplicationStatus.SUCCESSFUL: [ApplicationStatus.BOOKED, ApplicationStatus.UNSUCCESSFUL, ApplicationStatus.SUCCESSFUL],
+            ApplicationStatus.BOOKED: [ApplicationStatus.UNSUCCESSFUL, ApplicationStatus.BOOKED],
+            ApplicationStatus.UNSUCCESSFUL: [ApplicationStatus.UNSUCCESSFUL] # Terminal state
+        }
+        if new_status not in allowed.get(self._status, []):
+             if not (new_status == ApplicationStatus.UNSUCCESSFUL and self._request_withdrawal):
+                  print(f"Warning: Potentially invalid status transition: {self._status.value} -> {new_status.value}")
+
+        self._status = new_status
+
+    def set_withdrawal_request(self, requested: bool):
+        if requested and self._status not in [ApplicationStatus.PENDING, ApplicationStatus.SUCCESSFUL, ApplicationStatus.BOOKED]:
+             raise OperationError(f"Cannot request withdrawal for application with status '{self._status.value}'.")
+        self._request_withdrawal = bool(requested)
+
+    def to_csv_dict(self) -> dict:
+        return {
+            'ApplicantNRIC': self._applicant_nric,
+            'ProjectName': self._project_name,
+            'FlatType': self._flat_type.value,
+            'Status': self._status.value,
+            'RequestWithdrawal': str(self._request_withdrawal)
+        }
+
+    @classmethod
+    def from_csv_dict(cls, row_dict: dict) -> 'Application':
+        try:
+            flat_type = FlatType.from_value(row_dict['FlatType'])
+            status = ApplicationStatus(row_dict['Status'])
+            request_withdrawal = row_dict.get('RequestWithdrawal', 'False').lower() == 'true'
+
+            return cls(
+                applicant_nric=row_dict['ApplicantNRIC'],
+                project_name=row_dict['ProjectName'],
+                flat_type=flat_type,
+                status=status,
+                request_withdrawal=request_withdrawal
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating Application from CSV row: {row_dict}. Error: {e}")
+
+    def __eq__(self, other):
+        if not isinstance(other, Application): return NotImplemented
+        return (self._applicant_nric == other._applicant_nric and
+                self._project_name == other._project_name)
+
+    def __hash__(self):
+        return hash((self._applicant_nric, self._project_name))
+
+    def get_display_summary(self, applicant_name: str) -> str:
+         req_status = " (Withdrawal Requested)" if self._request_withdrawal else ""
+         return (f"Project: {self._project_name} | Applicant: {applicant_name} ({self._applicant_nric}) | "
+                 f"Type: {self._flat_type.to_string()} | Status: {self._status.value}{req_status}")
+----
+# File name: model\enquiry.py
+from utils.input_util import InputUtil
+from common.exceptions import DataLoadError, OperationError
+
+class Enquiry:
+    """Represents an enquiry submitted by an applicant."""
+    _HEADERS = ['EnquiryID', 'ApplicantNRIC', 'ProjectName', 'Text', 'Reply']
+
+    def __init__(self, enquiry_id: int, applicant_nric: str, project_name: str, text: str, reply: str = ""):
+        if not isinstance(enquiry_id, int): raise ValueError("Enquiry ID must be an integer.")
+        if not InputUtil.validate_nric(applicant_nric): raise ValueError("Invalid Applicant NRIC")
+        if not project_name: raise ValueError("Project Name cannot be empty")
+        if not text: raise ValueError("Enquiry text cannot be empty")
+
+        self._enquiry_id = enquiry_id
+        self._applicant_nric = applicant_nric
+        self._project_name = project_name
+        self._text = text
+        self._reply = reply if reply is not None else ""
+
+    # --- Getters ---
+    @property
+    def enquiry_id(self): return self._enquiry_id
+    @property
+    def applicant_nric(self): return self._applicant_nric
+    @property
+    def project_name(self): return self._project_name
+    @property
+    def text(self): return self._text
+    @property
+    def reply(self): return self._reply
+
+    # --- State Checks ---
+    def is_replied(self) -> bool:
+        return bool(self._reply)
+
+    # --- State Modifiers ---
+    def set_text(self, new_text: str):
+        if self.is_replied():
+            raise OperationError("Cannot edit an enquiry that has already been replied to.")
+        if not new_text:
+            raise ValueError("Enquiry text cannot be empty.")
+        self._text = new_text
+
+    def set_reply(self, reply_text: str):
+        if not reply_text:
+             raise ValueError("Reply text cannot be empty.")
+        self._reply = reply_text
+
+    def set_id(self, new_id: int):
+        """Allows repository to set the ID upon adding."""
+        if not isinstance(new_id, int) or new_id <= 0:
+             raise ValueError("New Enquiry ID must be a positive integer.")
+        if self._enquiry_id != 0 and self._enquiry_id != new_id: # Allow setting if default 0
+             print(f"Warning: Changing existing Enquiry ID from {self._enquiry_id} to {new_id}")
+        self._enquiry_id = new_id
+
+    def to_csv_dict(self) -> dict:
+        return {
+            'EnquiryID': self._enquiry_id,
+            'ApplicantNRIC': self._applicant_nric,
+            'ProjectName': self._project_name,
+            'Text': self._text,
+            'Reply': self._reply
+        }
+
+    @classmethod
+    def from_csv_dict(cls, row_dict: dict) -> 'Enquiry':
+        try:
+            return cls(
+                enquiry_id=int(row_dict['EnquiryID']),
+                applicant_nric=row_dict['ApplicantNRIC'],
+                project_name=row_dict['ProjectName'],
+                text=row_dict['Text'],
+                reply=row_dict.get('Reply', '')
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating Enquiry from CSV row: {row_dict}. Error: {e}")
+
+    def __eq__(self, other):
+        if not isinstance(other, Enquiry): return NotImplemented
+        return self._enquiry_id == other._enquiry_id
+
+    def __hash__(self):
+        return hash(self._enquiry_id)
+
+    def get_display_summary(self) -> str:
+         reply_status = "Replied" if self.is_replied() else "Unreplied"
+         text_preview = (self._text[:47] + '...') if len(self._text) > 50 else self._text
+         return f"ID: {self._enquiry_id:<4} | Project: {self._project_name:<15} | Status: {reply_status:<9} | Text: {text_preview}"
+----
+# File name: model\hdb_manager.py
+from .user import User
+from common.enums import UserRole
+
+class HDBManager(User):
+    """Represents an HDB Manager user."""
+    def __init__(self, name: str, nric: str, age: int, marital_status: str, password: str = "password"):
+        super().__init__(name, nric, age, marital_status, password)
+
+    def get_role(self) -> UserRole:
+        return UserRole.HDB_MANAGER
+----
+# File name: model\hdb_officer.py
+from .applicant import Applicant # Officers are also Applicants
+from common.enums import UserRole
+
+class HDBOfficer(Applicant):
+    """Represents an HDB Officer user. Inherits Applicant capabilities."""
+    def __init__(self, name: str, nric: str, age: int, marital_status: str, password: str = "password"):
+        super().__init__(name, nric, age, marital_status, password)
+
+    def get_role(self) -> UserRole:
+        return UserRole.HDB_OFFICER
+----
+# File name: model\project.py
+from datetime import date
+from utils.input_util import InputUtil
+from utils.date_util import DateUtil
+from common.enums import FlatType
+from common.exceptions import DataLoadError, OperationError
+
+class Project:
+    """Represents a BTO project."""
+    _HEADERS = [ # Define expected headers for CSV consistency
+        'Project Name', 'Neighborhood', 'Type 1', 'Number of units for Type 1',
+        'Selling price for Type 1', 'Type 2', 'Number of units for Type 2',
+        'Selling price for Type 2', 'Application opening date',
+        'Application closing date', 'Manager', 'Officer Slot', 'Officer', 'Visibility'
+    ]
+
+    def __init__(self, project_name: str, neighborhood: str,
+                 num_units1: int, price1: int, num_units2: int, price2: int,
+                 opening_date: date, closing_date: date, manager_nric: str,
+                 officer_slot: int, officer_nrics: list[str] | None = None, visibility: bool = True):
+
+        if not project_name: raise ValueError("Project Name cannot be empty")
+        if not neighborhood: raise ValueError("Neighborhood cannot be empty")
+        if not manager_nric or not InputUtil.validate_nric(manager_nric):
+             raise ValueError(f"Invalid Manager NRIC: {manager_nric}")
+        if not isinstance(opening_date, date) or not isinstance(closing_date, date):
+            raise ValueError("Opening and Closing dates must be valid date objects.")
+        if closing_date < opening_date:
+            raise ValueError("Closing date cannot be before opening date.")
+        if not (0 <= int(officer_slot) <= 10):
+             raise ValueError("Officer slots must be between 0 and 10.")
+        if any(int(v) < 0 for v in [num_units1, price1, num_units2, price2]):
+            raise ValueError("Numeric project values (units, price) cannot be negative.")
+
+        self._project_name = project_name
+        self._neighborhood = neighborhood
+        self._type1 = FlatType.TWO_ROOM
+        self._num_units1 = int(num_units1)
+        self._price1 = int(price1)
+        self._type2 = FlatType.THREE_ROOM
+        self._num_units2 = int(num_units2)
+        self._price2 = int(price2)
+        self._opening_date = opening_date
+        self._closing_date = closing_date
+        self._manager_nric = manager_nric
+        self._officer_slot = int(officer_slot)
+        self._officer_nrics = list(officer_nrics) if officer_nrics is not None else []
+        self._visibility = bool(visibility)
+
+        if len(self._officer_nrics) > self._officer_slot:
+             raise ValueError("Number of assigned officers exceeds available slots.")
+
+    # --- Getters ---
+    @property
+    def project_name(self): return self._project_name
+    @property
+    def neighborhood(self): return self._neighborhood
+    @property
+    def opening_date(self): return self._opening_date
+    @property
+    def closing_date(self): return self._closing_date
+    @property
+    def manager_nric(self): return self._manager_nric
+    @property
+    def officer_slot(self): return self._officer_slot
+    @property
+    def visibility(self): return self._visibility
+    @property
+    def officer_nrics(self): return list(self._officer_nrics) # Return copy
+
+    # --- Calculated Properties / State Checks ---
+    def is_active_period(self, check_date: date | None = None) -> bool:
+        if check_date is None: check_date = date.today()
+        return self._opening_date <= check_date <= self._closing_date
+
+    def is_currently_visible_and_active(self) -> bool:
+        return self._visibility and self.is_active_period()
+
+    def get_flat_details(self, flat_type: FlatType) -> tuple[int, int]:
+        if flat_type == FlatType.TWO_ROOM: return self._num_units1, self._price1
+        if flat_type == FlatType.THREE_ROOM: return self._num_units2, self._price2
+        raise ValueError(f"Invalid flat type requested: {flat_type}")
+
+    def get_available_officer_slots(self) -> int:
+        return self._officer_slot - len(self._officer_nrics)
+
+    def can_add_officer(self) -> bool:
+        return self.get_available_officer_slots() > 0
+
+    # --- State Modifiers ---
+    def decrease_unit_count(self, flat_type: FlatType) -> bool:
+        if flat_type == FlatType.TWO_ROOM and self._num_units1 > 0:
+            self._num_units1 -= 1; return True
+        if flat_type == FlatType.THREE_ROOM and self._num_units2 > 0:
+            self._num_units2 -= 1; return True
+        return False # Type invalid or no units left
+
+    def increase_unit_count(self, flat_type: FlatType) -> bool:
+        if flat_type == FlatType.TWO_ROOM: self._num_units1 += 1; return True
+        if flat_type == FlatType.THREE_ROOM: self._num_units2 += 1; return True
+        return False # Invalid type
+
+    def add_officer(self, officer_nric: str) -> bool:
+        if not InputUtil.validate_nric(officer_nric):
+             raise ValueError("Invalid NRIC format for officer.")
+        if officer_nric not in self._officer_nrics:
+            if self.can_add_officer():
+                self._officer_nrics.append(officer_nric); return True
+            else:
+                raise OperationError("No available officer slots.")
+        return True # Already present is considered success
+
+    def remove_officer(self, officer_nric: str) -> bool:
+        if officer_nric in self._officer_nrics:
+            self._officer_nrics.remove(officer_nric); return True
+        return False # Not found
+
+    def set_visibility(self, is_visible: bool):
+        self._visibility = bool(is_visible)
+
+    def update_details(self, updates: dict):
+        """Updates project details from a dictionary. Performs validation."""
+        # Basic validation before applying changes
+        new_name = updates.get('project_name', self._project_name)
+        new_hood = updates.get('neighborhood', self._neighborhood)
+        n1 = int(updates.get('num_units1', self._num_units1))
+        p1 = int(updates.get('price1', self._price1))
+        n2 = int(updates.get('num_units2', self._num_units2))
+        p2 = int(updates.get('price2', self._price2))
+        slot = int(updates.get('officer_slot', self._officer_slot))
+        new_od = updates.get('opening_date', self._opening_date)
+        new_cd = updates.get('closing_date', self._closing_date)
+
+        if not new_name: raise ValueError("Project Name cannot be empty")
+        if not new_hood: raise ValueError("Neighborhood cannot be empty")
+        if any(v < 0 for v in [n1, p1, n2, p2, slot]): raise ValueError("Numeric values cannot be negative.")
+        if not (0 <= slot <= 10): raise ValueError("Officer slots must be between 0 and 10.")
+        if slot < len(self._officer_nrics): raise ValueError(f"Cannot reduce slots below current assigned officers ({len(self._officer_nrics)}).")
+        if not isinstance(new_od, date) or not isinstance(new_cd, date): raise ValueError("Dates must be valid date objects.")
+        if new_cd < new_od: raise ValueError("Closing date cannot be before opening date.")
+
+        # Apply validated changes
+        self._project_name = new_name
+        self._neighborhood = new_hood
+        self._num_units1 = n1
+        self._price1 = p1
+        self._num_units2 = n2
+        self._price2 = p2
+        self._officer_slot = slot
+        self._opening_date = new_od
+        self._closing_date = new_cd
+        # Manager NRIC, visibility, officer list are typically handled by specific methods
+
+    def to_csv_dict(self) -> dict:
+        """Converts project data to a dictionary suitable for CSV writing."""
+        return {
+            'Project Name': self._project_name,
+            'Neighborhood': self._neighborhood,
+            'Type 1': self._type1.to_string(),
+            'Number of units for Type 1': self._num_units1,
+            'Selling price for Type 1': self._price1,
+            'Type 2': self._type2.to_string(),
+            'Number of units for Type 2': self._num_units2,
+            'Selling price for Type 2': self._price2,
+            'Application opening date': DateUtil.format_date(self._opening_date),
+            'Application closing date': DateUtil.format_date(self._closing_date),
+            'Manager': self._manager_nric,
+            'Officer Slot': self._officer_slot,
+            'Officer': ','.join(self._officer_nrics),
+            'Visibility': str(self._visibility)
+        }
+
+    @classmethod
+    def from_csv_dict(cls, row_dict: dict) -> 'Project':
+        """Creates a Project instance from a CSV dictionary."""
+        try:
+            officer_nrics = [nric.strip() for nric in row_dict.get('Officer', '').split(',') if nric.strip()]
+            visibility = row_dict.get('Visibility', 'True').lower() == 'true'
+            opening_date = DateUtil.parse_date(row_dict['Application opening date'])
+            closing_date = DateUtil.parse_date(row_dict['Application closing date'])
+            if opening_date is None or closing_date is None:
+                 raise ValueError("Invalid date format in CSV row")
+
+            return cls(
+                project_name=row_dict['Project Name'],
+                neighborhood=row_dict['Neighborhood'],
+                num_units1=int(row_dict['Number of units for Type 1']),
+                price1=int(row_dict['Selling price for Type 1']),
+                num_units2=int(row_dict['Number of units for Type 2']),
+                price2=int(row_dict['Selling price for Type 2']),
+                opening_date=opening_date,
+                closing_date=closing_date,
+                manager_nric=row_dict['Manager'],
+                officer_slot=int(row_dict['Officer Slot']),
+                officer_nrics=officer_nrics,
+                visibility=visibility
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating Project from CSV row: {row_dict}. Error: {e}")
+
+    def __eq__(self, other):
+        if not isinstance(other, Project): return NotImplemented
+        return self._project_name == other._project_name
+
+    def __hash__(self):
+        return hash(self._project_name)
+
+    def get_display_summary(self) -> str:
+        vis = "Visible" if self._visibility else "Hidden"
+        act = "Active" if self.is_currently_visible_and_active() else "Inactive/Closed"
+        return f"{self._project_name} ({self._neighborhood}) - Status: {act}, View: {vis}"
+----
+# File name: model\registration.py
+from utils.input_util import InputUtil
+from common.enums import RegistrationStatus
+from common.exceptions import DataLoadError
+
+class Registration:
+    """Represents an HDB Officer's registration for a project."""
+    _HEADERS = ['OfficerNRIC', 'ProjectName', 'Status']
+
+    def __init__(self, officer_nric: str, project_name: str, status: RegistrationStatus = RegistrationStatus.PENDING):
+        if not InputUtil.validate_nric(officer_nric): raise ValueError("Invalid Officer NRIC")
+        if not project_name: raise ValueError("Project Name cannot be empty")
+        if not isinstance(status, RegistrationStatus): raise ValueError("Invalid RegistrationStatus")
+
+        self._officer_nric = officer_nric
+        self._project_name = project_name
+        self._status = status
+
+    # --- Getters ---
+    @property
+    def officer_nric(self): return self._officer_nric
+    @property
+    def project_name(self): return self._project_name
+    @property
+    def status(self): return self._status
+
+    # --- State Modifiers ---
+    def set_status(self, new_status: RegistrationStatus):
+        if not isinstance(new_status, RegistrationStatus):
+            raise ValueError("Invalid status provided.")
+        if self._status != RegistrationStatus.PENDING and new_status != self._status:
+             print(f"Warning: Changing registration status from non-pending state: {self._status.value} -> {new_status.value}")
+        self._status = new_status
+
+    def to_csv_dict(self) -> dict:
+        return {
+            'OfficerNRIC': self._officer_nric,
+            'ProjectName': self._project_name,
+            'Status': self._status.value
+        }
+
+    @classmethod
+    def from_csv_dict(cls, row_dict: dict) -> 'Registration':
+        try:
+            status = RegistrationStatus(row_dict['Status'])
+            return cls(
+                officer_nric=row_dict['OfficerNRIC'],
+                project_name=row_dict['ProjectName'],
+                status=status
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating Registration from CSV row: {row_dict}. Error: {e}")
+
+    def __eq__(self, other):
+        if not isinstance(other, Registration): return NotImplemented
+        return (self._officer_nric == other._officer_nric and
+                self._project_name == other._project_name)
+
+    def __hash__(self):
+        return hash((self._officer_nric, self._project_name))
+
+    def get_display_summary(self, officer_name: str) -> str:
+         return f"Project: {self._project_name} | Officer: {officer_name} ({self._officer_nric}) | Status: {self._status.value}"
+----
+# File name: model\user.py
+from abc import ABC, abstractmethod
+from utils.input_util import InputUtil
+from common.enums import UserRole
+from common.exceptions import OperationError
+
+class User(ABC):
+    """Abstract base class for all users."""
+    def __init__(self, name: str, nric: str, age: int, marital_status: str, password: str = "password"):
+        if not name: raise ValueError("Name cannot be empty.")
+        if not InputUtil.validate_nric(nric):
+            raise ValueError(f"Invalid NRIC format: {nric}")
+        if not isinstance(age, int) or age < 0:
+            raise ValueError(f"Invalid age value: {age}")
+        if not marital_status: raise ValueError("Marital status cannot be empty.")
+        if not password: raise ValueError("Password cannot be empty.")
+
+        self._name = name
+        self._nric = nric
+        self._age = age
+        self._marital_status = marital_status
+        self._password = password
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def nric(self) -> str:
+        return self._nric
+
+    @property
+    def age(self) -> int:
+        return self._age
+
+    @property
+    def marital_status(self) -> str:
+        return self._marital_status
+
+    def check_password(self, password_attempt: str) -> bool:
+        """Verifies if the provided password matches."""
+        return self._password == password_attempt
+
+    def change_password(self, new_password: str):
+        """Updates the user's password after validation."""
+        if not new_password:
+            raise OperationError("Password cannot be empty.")
+        # Add more password complexity rules here if needed
+        self._password = new_password
+
+    def get_password_for_storage(self) -> str:
+        """Allows repository layer to retrieve the password for saving."""
+        return self._password
+
+    @abstractmethod
+    def get_role(self) -> UserRole:
+        """Returns the specific role of the user."""
+        pass
+
+    # Explicit method for display instead of relying solely on __str__
+    def get_display_details(self) -> str:
+        return f"Name: {self._name}, NRIC: {self._nric}, Role: {self.get_role().value}"
+
+    # Keep __eq__ and __hash__ for identity based on NRIC
+    def __eq__(self, other):
+        if not isinstance(other, User):
+            return NotImplemented
+        return self._nric == other._nric
+
+    def __hash__(self):
+        return hash(self._nric)
+----
+# File name: model\__init__.py
+
+----
+# File name: repository\applicant_repository.py
+from typing import Dict, Any
+from .base_repository import BaseRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.applicant import Applicant
+from common.enums import FilePath
+from common.exceptions import DataLoadError
+
+# Applicant key is string (NRIC)
+class ApplicantRepository(BaseRepository[Applicant, str]):
+    _HEADERS = ['Name', 'NRIC', 'Age', 'Marital Status', 'Password']
+
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=Applicant,
+            source_id=FilePath.APPLICANT.value,
+            headers=self._HEADERS,
+            key_getter=lambda applicant: applicant.nric
+        )
+
+    # Override default instance creation/dict conversion to handle User attributes directly
+    def _create_instance(self, row_dict: Dict[str, Any]) -> Applicant:
+        try:
+            return Applicant(
+                name=row_dict['Name'],
+                nric=row_dict['NRIC'],
+                age=int(row_dict['Age']),
+                marital_status=row_dict['Marital Status'],
+                password=row_dict.get('Password', 'password') # Default if missing
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating Applicant from row: {row_dict}. Error: {e}")
+
+    def _to_storage_dict(self, item: Applicant) -> Dict[str, Any]:
+        return {
+            'Name': item.name,
+            'NRIC': item.nric,
+            'Age': item.age,
+            'Marital Status': item.marital_status,
+            'Password': item.get_password_for_storage()
+        }
+----
+# File name: repository\application_repository.py
+from typing import Optional, List
+from .base_repository import BaseRepository
+from .interfaces.iapplication_repository import IApplicationRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.application import Application
+from common.enums import FilePath, ApplicationStatus
+from common.exceptions import IntegrityError
+
+class ApplicationRepository(BaseRepository[Application, str], IApplicationRepository):
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=Application,
+            source_id=FilePath.APPLICATION.value,
+            headers=Application._HEADERS,
+            key_getter=lambda app: f"{app.applicant_nric}-{app.project_name}" # Composite key
+        )
+        # Default _create_instance and _to_storage_dict using Application methods are sufficient
+
+    def find_by_applicant_nric(self, nric: str) -> Optional[Application]:
+        """Finds the current non-unsuccessful application for an applicant."""
+        if not self._loaded: self.load()
+        for app in self._data.values():
+            if app.applicant_nric == nric and app.status != ApplicationStatus.UNSUCCESSFUL:
+                return app
+        return None
+
+    def find_all_by_applicant_nric(self, nric: str) -> List[Application]:
+        """Finds all applications (including unsuccessful) for an applicant."""
+        if not self._loaded: self.load()
+        return [app for app in self._data.values() if app.applicant_nric == nric]
+
+    def find_by_project_name(self, project_name: str) -> List[Application]:
+        if not self._loaded: self.load()
+        return [app for app in self._data.values() if app.project_name == project_name]
+
+    # Override add to check for existing active application before adding
+    def add(self, item: Application):
+        if not self._loaded: self.load()
+        # Check for existing *active* application by this applicant
+        existing_active = self.find_by_applicant_nric(item.applicant_nric)
+        if existing_active:
+            raise IntegrityError(f"Applicant {item.applicant_nric} already has an active application for project '{existing_active.project_name}'.")
+        # Use base class add logic if check passes
+        super().add(item)
+----
+# File name: repository\base_repository.py
+from abc import ABC
+from typing import TypeVar, List, Dict, Any, Optional, Callable, Type
+from .interfaces.ibase_repository import IBaseRepository
+from .storage.istorage_adapter import IStorageAdapter
+from common.exceptions import IntegrityError, DataLoadError, DataSaveError, ConfigurationError
+
+# Re-declare generics for use within this class
+T = TypeVar('T')
+K = TypeVar('K')
+
+class BaseRepository(IBaseRepository[T, K], ABC):
+    """
+    Abstract base implementation for repositories using an IStorageAdapter.
+    Handles loading, saving, and in-memory storage.
+    """
+    def __init__(self,
+                 storage_adapter: IStorageAdapter,
+                 model_class: Type[T],
+                 source_id: str,
+                 headers: List[str],
+                 key_getter: Callable[[T], K]):
+        """
+        Initializes the repository.
+        Args:
+            storage_adapter: The adapter for reading/writing data.
+            model_class: The class of the model this repository manages (e.g., Project).
+            source_id: Identifier for the data source (e.g., file path).
+            headers: Expected headers for the data source.
+            key_getter: A function that takes a model instance and returns its unique key.
+        """
+        if not all([storage_adapter, model_class, source_id, headers, key_getter]):
+            raise ConfigurationError("All BaseRepository constructor arguments must be provided.")
+
+        self._storage = storage_adapter
+        self._model_class = model_class
+        self._source_id = source_id
+        self._headers = headers
+        self._get_key = key_getter
+        self._data: Dict[K, T] = {} # In-memory store {key: model_instance}
+        self._loaded = False
+
+    def _create_instance(self, row_dict: Dict[str, Any]) -> T:
+        """Creates a model instance from a storage row dictionary."""
+        # Default implementation assumes Model.from_csv_dict exists
+        try:
+            # Check if the class method exists before calling
+            from_dict_method = getattr(self._model_class, "from_csv_dict", None)
+            if callable(from_dict_method):
+                return from_dict_method(row_dict)
+            else:
+                raise NotImplementedError(f"{self._model_class.__name__} must implement from_csv_dict or _create_instance must be overridden.")
+        except (DataLoadError, ValueError, TypeError, KeyError) as e:
+             # Catch specific errors from model creation
+             raise DataLoadError(f"Error creating {self._model_class.__name__} instance: {e}")
+
+    def _to_storage_dict(self, item: T) -> Dict[str, Any]:
+        """Converts a model instance to a dictionary suitable for storage."""
+        # Default implementation assumes item.to_csv_dict exists
+        try:
+            # Check if the instance method exists before calling
+            to_dict_method = getattr(item, "to_csv_dict", None)
+            if callable(to_dict_method):
+                return to_dict_method()
+            else:
+                 raise NotImplementedError(f"{self._model_class.__name__} must implement to_csv_dict or _to_storage_dict must be overridden.")
+        except Exception as e:
+            # Catch potential errors during conversion
+            raise DataSaveError(f"Error converting {self._model_class.__name__} instance to dict: {e}")
+
+    def load(self):
+        """Loads data from the storage adapter into the in-memory store."""
+        if self._loaded:
+            print(f"Data for {self._model_class.__name__} already loaded.")
+            return
+
+        self._data = {}
+        try:
+            storage_data, _ = self._storage.read_data(self._source_id, self._headers)
+            for i, row_dict in enumerate(storage_data):
+                try:
+                    instance = self._create_instance(row_dict)
+                    key = self._get_key(instance)
+                    if key in self._data:
+                        raise IntegrityError(f"Duplicate key '{key}' found for {self._model_class.__name__} in {self._source_id} at source row {i+2}.")
+                    self._data[key] = instance
+                except (ValueError, TypeError, IntegrityError, DataLoadError) as e:
+                    print(f"Warning: Error processing row {i+2} in {self._source_id}: {row_dict}. Error: {e}. Skipping.")
+                except Exception as e: # Catch unexpected errors during instance creation/keying
+                    print(f"Warning: Unexpected error processing row {i+2} in {self._source_id}: {row_dict}. Error: {e}. Skipping.")
+
+            self._loaded = True
+            print(f"Loaded {len(self._data)} {self._model_class.__name__} items from {self._source_id}.")
+
+        except (FileNotFoundError, DataLoadError) as e:
+            print(f"Info: Issue loading {self._source_id}: {e}. Starting with empty data.")
+            self._data = {} # Ensure data is empty if load fails
+            self._loaded = True # Mark as loaded even if empty/failed to avoid reload attempts
+        except IntegrityError as e: # Fatal integrity error during load
+             raise DataLoadError(f"Fatal integrity error loading {self._source_id}: {e}")
+
+    def save(self):
+        """Saves the current in-memory data back to storage via the adapter."""
+        if not self._loaded:
+            print(f"Warning: Attempting to save {self._model_class.__name__} data before loading. Skipping save.")
+            return
+        try:
+            # Sort keys for consistent output order (optional but good practice)
+            # Handle potential non-sortable keys gracefully
+            try:
+                sorted_keys = sorted(self._data.keys())
+            except TypeError:
+                sorted_keys = list(self._data.keys()) # Use original order if keys aren't sortable
+
+            data_to_write = [self._to_storage_dict(self._data[key]) for key in sorted_keys]
+            self._storage.write_data(self._source_id, self._headers, data_to_write)
+            # print(f"Saved {len(data_to_write)} {self._model_class.__name__} items to {self._source_id}.") # Optional success message
+        except (DataSaveError, IOError) as e:
+            raise DataSaveError(f"Failed to save data for {self._model_class.__name__} to {self._source_id}: {e}")
+        except Exception as e:
+             raise DataSaveError(f"Unexpected error saving data for {self._model_class.__name__} to {self._source_id}: {e}")
+
+    # --- IBaseRepository Implementation ---
+    def get_all(self) -> List[T]:
+        if not self._loaded: self.load()
+        return list(self._data.values())
+
+    def find_by_key(self, key: K) -> Optional[T]:
+        if not self._loaded: self.load()
+        return self._data.get(key)
+
+    def add(self, item: T):
+        if not self._loaded: self.load()
+        if not isinstance(item, self._model_class):
+            raise TypeError(f"Item must be of type {self._model_class.__name__}")
+        key = self._get_key(item)
+        if key in self._data:
+            raise IntegrityError(f"{self._model_class.__name__} with key '{key}' already exists.")
+        self._data[key] = item
+        # Defer saving to explicit save() call or PersistenceManager
+
+    def update(self, item: T):
+        if not self._loaded: self.load()
+        if not isinstance(item, self._model_class):
+            raise TypeError(f"Item must be of type {self._model_class.__name__}")
+        key = self._get_key(item)
+        if key not in self._data:
+            raise IntegrityError(f"{self._model_class.__name__} with key '{key}' not found for update.")
+        self._data[key] = item
+        # Defer saving
+
+    def delete(self, key: K):
+        if not self._loaded: self.load()
+        if key not in self._data:
+            raise IntegrityError(f"{self._model_class.__name__} with key '{key}' not found for deletion.")
+        del self._data[key]
+        # Defer saving
+----
+# File name: repository\enquiry_repository.py
+from typing import Optional, List
+from .base_repository import BaseRepository
+from .interfaces.ienquiry_repository import IEnquiryRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.enquiry import Enquiry
+from common.enums import FilePath
+from common.exceptions import IntegrityError
+
+class EnquiryRepository(BaseRepository[Enquiry, int], IEnquiryRepository):
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=Enquiry,
+            source_id=FilePath.ENQUIRY.value,
+            headers=Enquiry._HEADERS,
+            key_getter=lambda enquiry: enquiry.enquiry_id # Key is integer ID
+        )
+        self._next_id = 0 # Initialized during load
+
+    def _calculate_next_id(self):
+        """Calculates the next ID based on current data."""
+        if not self._data:
+            return 1
+        # Keys are integers (EnquiryID)
+        try:
+            return max(int(k) for k in self._data.keys()) + 1
+        except ValueError: # Handle case where keys might not be ints somehow
+             print("Warning: Could not determine max Enquiry ID. Resetting next ID to 1.")
+             return 1
+
+    # Override load to calculate next ID after data is loaded
+    def load(self):
+        super().load() # Load data using base class method
+        self._next_id = self._calculate_next_id() # Calculate ID based on loaded data
+
+    # Override add to assign the next ID
+    def add(self, item: Enquiry):
+        if not self._loaded: self.load()
+        if not isinstance(item, self._model_class):
+            raise TypeError(f"Item must be of type {self._model_class.__name__}")
+
+        # Assign the next available ID before adding
+        item.set_id(self._next_id)
+        key = self._get_key(item) # Get the newly assigned ID as key
+
+        if key in self._data:
+            # This should ideally not happen if next_id logic is correct
+            raise IntegrityError(f"Enquiry with generated ID '{key}' already exists. ID generation failed?")
+
+        self._data[key] = item
+        self._next_id += 1 # Increment for the next add
+        # Defer saving
+
+    def get_next_id(self) -> int:
+        if not self._loaded: self.load()
+        return self._next_id
+
+    def find_by_id(self, enquiry_id: int) -> Optional[Enquiry]:
+        try:
+            key = int(enquiry_id)
+            return self.find_by_key(key)
+        except (ValueError, TypeError):
+            return None # Invalid ID format
+
+    def find_by_applicant(self, applicant_nric: str) -> List[Enquiry]:
+        if not self._loaded: self.load()
+        return [enq for enq in self._data.values() if enq.applicant_nric == applicant_nric]
+
+    def find_by_project(self, project_name: str) -> List[Enquiry]:
+        if not self._loaded: self.load()
+        return [enq for enq in self._data.values() if enq.project_name == project_name]
+
+    def delete_by_id(self, enquiry_id: int):
+         try:
+            key = int(enquiry_id)
+            self.delete(key) # Base delete handles not found error
+         except (ValueError, TypeError):
+             raise IntegrityError(f"Invalid Enquiry ID format for deletion: {enquiry_id}")
+----
+# File name: repository\manager_repository.py
+from typing import Dict, Any
+from .base_repository import BaseRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.hdb_manager import HDBManager
+from common.enums import FilePath
+from common.exceptions import DataLoadError
+
+# Manager key is string (NRIC)
+class ManagerRepository(BaseRepository[HDBManager, str]):
+    _HEADERS = ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'] # Same as Applicant
+
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=HDBManager,
+            source_id=FilePath.MANAGER.value,
+            headers=self._HEADERS,
+            key_getter=lambda manager: manager.nric
+        )
+
+    def _create_instance(self, row_dict: Dict[str, Any]) -> HDBManager:
+        try:
+            return HDBManager(
+                name=row_dict['Name'],
+                nric=row_dict['NRIC'],
+                age=int(row_dict['Age']),
+                marital_status=row_dict['Marital Status'],
+                password=row_dict.get('Password', 'password')
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating HDBManager from row: {row_dict}. Error: {e}")
+
+    def _to_storage_dict(self, item: HDBManager) -> Dict[str, Any]:
+         return {
+            'Name': item.name,
+            'NRIC': item.nric,
+            'Age': item.age,
+            'Marital Status': item.marital_status,
+            'Password': item.get_password_for_storage()
+        }
+----
+# File name: repository\officer_repository.py
+from typing import Dict, Any
+from .base_repository import BaseRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.hdb_officer import HDBOfficer
+from common.enums import FilePath
+from common.exceptions import DataLoadError
+
+# Officer key is string (NRIC)
+class OfficerRepository(BaseRepository[HDBOfficer, str]):
+    _HEADERS = ['Name', 'NRIC', 'Age', 'Marital Status', 'Password'] # Same as Applicant
+
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=HDBOfficer,
+            source_id=FilePath.OFFICER.value,
+            headers=self._HEADERS,
+            key_getter=lambda officer: officer.nric
+        )
+
+    def _create_instance(self, row_dict: Dict[str, Any]) -> HDBOfficer:
+        try:
+            return HDBOfficer(
+                name=row_dict['Name'],
+                nric=row_dict['NRIC'],
+                age=int(row_dict['Age']),
+                marital_status=row_dict['Marital Status'],
+                password=row_dict.get('Password', 'password')
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            raise DataLoadError(f"Error creating HDBOfficer from row: {row_dict}. Error: {e}")
+
+    def _to_storage_dict(self, item: HDBOfficer) -> Dict[str, Any]:
+         return {
+            'Name': item.name,
+            'NRIC': item.nric,
+            'Age': item.age,
+            'Marital Status': item.marital_status,
+            'Password': item.get_password_for_storage()
+        }
+----
+# File name: repository\persistence_manager.py
+from typing import List
+from .interfaces.ibase_repository import IBaseRepository
+from common.exceptions import DataSaveError
+
+class PersistenceManager:
+    """Manages loading and saving data across multiple repositories."""
+
+    def __init__(self, repositories: List[IBaseRepository]):
+        """
+        Initializes the PersistenceManager.
+        Args:
+            repositories: A list of repository instances to manage.
+        """
+        self._repositories = repositories
+
+    def load_all(self):
+        """Loads data for all managed repositories."""
+        print("Loading all data...")
+        errors = []
+        for repo in self._repositories:
+            try:
+                repo.load()
+            except Exception as e:
+                # Log error but continue loading others
+                error_msg = f"Failed to load data for {type(repo).__name__}: {e}"
+                print(f"ERROR: {error_msg}")
+                errors.append(error_msg)
+        if errors:
+            # Decide if loading errors are fatal or just warnings
+            # For now, treat as warnings but report them
+            print("\n--- Loading Errors Encountered ---")
+            for err in errors:
+                print(f"- {err}")
+            print("---------------------------------")
+        else:
+            print("All data loaded successfully.")
+
+
+    def save_all(self):
+        """Saves data for all managed repositories."""
+        errors = []
+        for repo in self._repositories:
+            try:
+                repo.save()
+            except Exception as e:
+                error_msg = f"Failed to save data for {type(repo).__name__}: {e}"
+                print(f"ERROR: {error_msg}")
+                errors.append(error_msg)
+
+        if errors:
+            # Combine errors into a single exception to signal failure
+            raise DataSaveError("Errors occurred during data save:\n" + "\n".join(errors))
+----
+# File name: repository\project_repository.py
+from typing import Optional, List
+from .base_repository import BaseRepository
+from .interfaces.iproject_repository import IProjectRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.project import Project
+from common.enums import FilePath
+
+class ProjectRepository(BaseRepository[Project, str], IProjectRepository):
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=Project,
+            source_id=FilePath.PROJECT.value,
+            headers=Project._HEADERS, # Use headers defined in Project model
+            key_getter=lambda project: project.project_name
+        )
+        # Default _create_instance and _to_storage_dict using Project methods are sufficient
+
+    def find_by_name(self, name: str) -> Optional[Project]:
+        return self.find_by_key(name)
+
+    def delete_by_name(self, name: str):
+        self.delete(name) # Base class handles key not found
+
+    def find_by_manager_nric(self, manager_nric: str) -> List[Project]:
+        # Assuming your projects are stored in a dictionary like self._items
+        # or a list like self._data from a base class
+        # Adapt this line based on how you store the loaded projects internally
+        return [project for project in self.get_all() if project.manager_nric == manager_nric]
+----
+# File name: repository\registration_repository.py
+from typing import Optional, List
+from .base_repository import BaseRepository
+from .interfaces.iregistration_repository import IRegistrationRepository
+from .storage.istorage_adapter import IStorageAdapter
+from model.registration import Registration
+from common.enums import FilePath, RegistrationStatus
+
+class RegistrationRepository(BaseRepository[Registration, str], IRegistrationRepository):
+    def __init__(self, storage_adapter: IStorageAdapter):
+        super().__init__(
+            storage_adapter=storage_adapter,
+            model_class=Registration,
+            source_id=FilePath.REGISTRATION.value,
+            headers=Registration._HEADERS,
+            key_getter=lambda reg: f"{reg.officer_nric}-{reg.project_name}" # Composite key
+        )
+        # Default _create_instance and _to_storage_dict using Registration methods are sufficient
+
+    def find_by_officer_and_project(self, officer_nric: str, project_name: str) -> Optional[Registration]:
+        key = f"{officer_nric}-{project_name}"
+        return self.find_by_key(key)
+
+    def find_by_officer(self, officer_nric: str) -> List[Registration]:
+        if not self._loaded: self.load()
+        return [reg for reg in self._data.values() if reg.officer_nric == officer_nric]
+
+    def find_by_project(self, project_name: str, status_filter: Optional[RegistrationStatus] = None) -> List[Registration]:
+        if not self._loaded: self.load()
+        regs = [reg for reg in self._data.values() if reg.project_name == project_name]
+        if status_filter:
+            if not isinstance(status_filter, RegistrationStatus):
+                 raise ValueError("status_filter must be a RegistrationStatus enum member.")
+            regs = [reg for reg in regs if reg.status == status_filter]
+        return regs
+----
+# File name: repository\user_repository_facade.py
+from typing import Optional, List, Dict
+from .interfaces.iuser_repository import IUserRepository
+from .interfaces.ibase_repository import IBaseRepository # For type hinting internal repos
+from model.user import User
+from model.applicant import Applicant
+from model.hdb_officer import HDBOfficer
+from model.hdb_manager import HDBManager
+from common.exceptions import OperationError, DataSaveError, IntegrityError
+
+class UserRepositoryFacade(IUserRepository):
+    """Facade to provide a single point of access for finding/saving users across roles."""
+
+    def __init__(self, applicant_repo: IBaseRepository[Applicant, str],
+                 officer_repo: IBaseRepository[HDBOfficer, str],
+                 manager_repo: IBaseRepository[HDBManager, str]):
+        self._applicant_repo = applicant_repo
+        self._officer_repo = officer_repo
+        self._manager_repo = manager_repo
+        self._all_users: Dict[str, User] = {} # Combined cache {nric: user_instance}
+        self._loaded = False
+
+    def load_all_users(self):
+        """Loads users from all specific repositories into the combined cache."""
+        if self._loaded: return
+        self._all_users = {}
+        duplicates = 0
+
+        repos = [self._applicant_repo, self._officer_repo, self._manager_repo]
+        for repo in repos:
+            try:
+                # Ensure underlying repos are loaded first
+                repo.load()
+                items = repo.get_all()
+                for user in items:
+                    if user.nric in self._all_users:
+                        # Log clearly which file is overwriting which
+                        existing_user_type = type(self._all_users[user.nric]).__name__
+                        new_user_type = type(user).__name__
+                        print(f"Warning: Duplicate NRIC '{user.nric}' found. Overwriting {existing_user_type} entry with {new_user_type} entry.")
+                        duplicates += 1
+                    self._all_users[user.nric] = user
+            except Exception as e:
+                 print(f"Error loading users from {type(repo).__name__}: {e}") # Log error but continue
+
+        self._loaded = True
+        print(f"Total unique users loaded into facade: {len(self._all_users)} (encountered {duplicates} duplicates).")
+
+    def find_user_by_nric(self, nric: str) -> Optional[User]:
+        if not self._loaded: self.load_all_users()
+        return self._all_users.get(nric)
+
+    def get_all_users(self) -> List[User]:
+        if not self._loaded: self.load_all_users()
+        return list(self._all_users.values())
+
+    def save_user(self, user: User):
+        """Delegates saving to the appropriate repository based on role."""
+        if not self._loaded:
+             # Avoid saving if not loaded, could lead to data loss
+             raise OperationError("User data not loaded. Cannot save user.")
+
+        repo: Optional[IBaseRepository] = None
+        if isinstance(user, HDBManager): repo = self._manager_repo
+        elif isinstance(user, HDBOfficer): repo = self._officer_repo
+        elif isinstance(user, Applicant): repo = self._applicant_repo
+        else: raise TypeError(f"Unknown user type cannot be saved: {type(user)}")
+
+        try:
+            # Attempt to update first (common case)
+            repo.update(user)
+        except IntegrityError: # If update fails (user not found in that repo), try adding
+            try:
+                repo.add(user)
+            except IntegrityError as add_e: # If add also fails (duplicate key)
+                 raise OperationError(f"Failed to add user {user.nric} after update failed: {add_e}")
+            except Exception as add_e:
+                 raise DataSaveError(f"Failed to add user {user.nric}: {add_e}")
+        except Exception as update_e: # Catch other update errors
+            raise DataSaveError(f"Failed to update user {user.nric}: {update_e}")
+
+        # Update the facade's cache immediately after successful add/update
+        self._all_users[user.nric] = user
+        # Defer actual file saving to PersistenceManager or explicit repo.save()
+
+    def save_all_user_types(self):
+        """Saves data for all underlying user repositories."""
+        print("Saving user data...")
+        errors = []
+        for repo in [self._applicant_repo, self._officer_repo, self._manager_repo]:
+            try:
+                repo.save()
+            except Exception as e:
+                errors.append(f"Failed to save {type(repo).__name__}: {e}")
+        if errors:
+            raise DataSaveError("Errors occurred during user save:\n" + "\n".join(errors))
+        print("User data saved.")
+----
+# File name: repository\__init__.py
+
+----
+# File name: service\application_service.py
+from typing import List, Optional, Tuple
+from .interfaces.iapplication_service import IApplicationService
+from .interfaces.iproject_service import IProjectService # Use interface
+from .interfaces.iregistration_service import IRegistrationService # Use interface
+from repository.interfaces.iapplication_repository import IApplicationRepository
+from repository.interfaces.iuser_repository import IUserRepository
+from model.application import Application
+from model.applicant import Applicant
+from model.hdb_officer import HDBOfficer
+from model.hdb_manager import HDBManager
+from model.project import Project
+from common.enums import FlatType, ApplicationStatus, UserRole
+from common.exceptions import OperationError, IntegrityError, DataSaveError
+
+class ApplicationService(IApplicationService):
+    """Handles business logic related to BTO applications."""
+    def __init__(self, application_repository: IApplicationRepository,
+                 project_service: IProjectService,
+                 registration_service: IRegistrationService,
+                 user_repository: IUserRepository):
+        self._app_repo = application_repository
+        self._project_service = project_service
+        self._reg_service = registration_service
+        self._user_repo = user_repository
+
+    def find_application_by_applicant(self, applicant_nric: str) -> Optional[Application]:
+        return self._app_repo.find_by_applicant_nric(applicant_nric)
+
+    def find_booked_application_by_applicant(self, applicant_nric: str) -> Optional[Application]:
+        """Finds a specifically BOOKED application for an applicant."""
+        apps = self._app_repo.find_all_by_applicant_nric(applicant_nric)
+        for app in apps:
+            if app.status == ApplicationStatus.BOOKED:
+                return app
+        return None
+
+    def get_all_applications_by_applicant(self, applicant_nric: str) -> List[Application]:
+         return self._app_repo.find_all_by_applicant_nric(applicant_nric)
+
+    def get_applications_for_project(self, project_name: str) -> List[Application]:
+        return self._app_repo.find_by_project_name(project_name)
+
+    def get_all_applications(self) -> List[Application]:
+        return self._app_repo.get_all()
+
+    def _check_applicant_eligibility(self, applicant: Applicant, project: Project, flat_type: FlatType):
+        """Performs eligibility checks. Raises OperationError if ineligible."""
+        if not project.is_currently_visible_and_active():
+            raise OperationError(f"Project '{project.project_name}' is not open for applications.")
+        if self.find_application_by_applicant(applicant.nric):
+            raise OperationError("You already have an active BTO application.")
+        if applicant.get_role() == UserRole.HDB_MANAGER:
+             raise OperationError("HDB Managers cannot apply for BTO projects.")
+        if applicant.get_role() == UserRole.HDB_OFFICER:
+            if self._reg_service.find_registration(applicant.nric, project.project_name):
+                raise OperationError("You cannot apply for a project you have registered for as an officer.")
+
+        is_single = applicant.marital_status == "Single"
+        is_married = applicant.marital_status == "Married"
+        if is_single and (applicant.age < 35 or flat_type != FlatType.TWO_ROOM):
+            raise OperationError("Single applicants must be >= 35 and can only apply for 2-Room.")
+        if is_married and applicant.age < 21:
+            raise OperationError("Married applicants must be at least 21 years old.")
+        if not is_single and not is_married:
+            raise OperationError(f"Unknown marital status '{applicant.marital_status}'.")
+
+        units, _ = project.get_flat_details(flat_type)
+        if units <= 0:
+            raise OperationError(f"No {flat_type.to_string()} units available in '{project.project_name}'.")
+
+    def apply_for_project(self, applicant: Applicant, project: Project, flat_type: FlatType) -> Application:
+        self._check_applicant_eligibility(applicant, project, flat_type)
+        new_application = Application(applicant.nric, project.project_name, flat_type)
+        try:
+            self._app_repo.add(new_application)
+            # Defer saving
+            return new_application
+        except IntegrityError as e: raise OperationError(f"Failed to submit application: {e}")
+
+    def request_withdrawal(self, application: Application):
+        if application.request_withdrawal:
+            raise OperationError("Withdrawal already requested.")
+        try:
+            application.set_withdrawal_request(True) # Model validates status
+            self._app_repo.update(application)
+            # Defer saving
+        except (OperationError, IntegrityError) as e:
+            # Attempt revert in memory? Risky without transaction.
+            # application.set_withdrawal_request(False) # Try reverting flag
+            raise OperationError(f"Failed to save withdrawal request: {e}")
+
+    def _manager_can_manage_app(self, manager: HDBManager, application: Application) -> bool:
+        project = self._project_service.find_project_by_name(application.project_name)
+        return project is not None and project.manager_nric == manager.nric
+
+    def manager_approve_application(self, manager: HDBManager, application: Application):
+        if not self._manager_can_manage_app(manager, application):
+            raise OperationError("You do not manage this project.")
+        if application.status != ApplicationStatus.PENDING:
+            raise OperationError(f"Application status is not PENDING.")
+        if application.request_withdrawal:
+            raise OperationError("Cannot approve application with pending withdrawal request.")
+
+        project = self._project_service.find_project_by_name(application.project_name)
+        if not project: raise IntegrityError(f"Project '{application.project_name}' not found.")
+
+        units, _ = project.get_flat_details(application.flat_type)
+        if units <= 0:
+            application.set_status(ApplicationStatus.UNSUCCESSFUL) # Auto-reject
+            self._app_repo.update(application)
+            # Defer saving
+            raise OperationError(f"No {application.flat_type.to_string()} units available. Application rejected.")
+
+        try:
+            application.set_status(ApplicationStatus.SUCCESSFUL)
+            self._app_repo.update(application)
+            # Defer saving
+        except IntegrityError as e:
+            # application.set_status(ApplicationStatus.PENDING) # Revert attempt
+            raise OperationError(f"Failed to save application approval: {e}")
+
+    def manager_reject_application(self, manager: HDBManager, application: Application):
+        if not self._manager_can_manage_app(manager, application):
+            raise OperationError("You do not manage this project.")
+        if application.status != ApplicationStatus.PENDING:
+            raise OperationError(f"Application status is not PENDING.")
+
+        try:
+            application.set_status(ApplicationStatus.UNSUCCESSFUL)
+            self._app_repo.update(application)
+            # Defer saving
+        except IntegrityError as e:
+            # application.set_status(ApplicationStatus.PENDING) # Revert attempt
+            raise OperationError(f"Failed to save application rejection: {e}")
+
+    def manager_approve_withdrawal(self, manager: HDBManager, application: Application):
+        if not self._manager_can_manage_app(manager, application):
+            raise OperationError("You do not manage this project.")
+        if not application.request_withdrawal:
+            raise OperationError("No withdrawal request is pending.")
+
+        original_status = application.status
+        project_updated = False
+        try:
+            application.set_status(ApplicationStatus.UNSUCCESSFUL)
+            application.set_withdrawal_request(False)
+
+            if original_status == ApplicationStatus.BOOKED:
+                 project = self._project_service.find_project_by_name(application.project_name)
+                 if project:
+                     if project.increase_unit_count(application.flat_type):
+                         # Update project repo immediately if unit count changed
+                         self._project_service._project_repo.update(project)
+                         project_updated = True
+                     else: print(f"Warning: Could not increase unit count for {application.flat_type.to_string()} in {project.project_name}.")
+                 else: print(f"Warning: Project {application.project_name} not found for unit count adjustment.")
+
+            self._app_repo.update(application)
+            # Defer saving of app repo and potentially project repo
+        except (IntegrityError, OperationError) as e:
+            # Rollback attempt (complex)
+            # application.set_status(original_status)
+            # application.set_withdrawal_request(True)
+            # if project_updated and project: project.decrease_unit_count(...) # etc.
+            raise OperationError(f"Failed to process withdrawal approval: {e}. State may be inconsistent.")
+
+    def manager_reject_withdrawal(self, manager: HDBManager, application: Application):
+        if not self._manager_can_manage_app(manager, application):
+            raise OperationError("You do not manage this project.")
+        if not application.request_withdrawal:
+            raise OperationError("No withdrawal request is pending.")
+
+        try:
+            application.set_withdrawal_request(False) # Just clear the flag
+            self._app_repo.update(application)
+            # Defer saving
+        except IntegrityError as e:
+            # application.set_withdrawal_request(True) # Revert attempt
+            raise OperationError(f"Failed to save withdrawal rejection: {e}")
+
+    def officer_book_flat(self, officer: HDBOfficer, application: Application) -> Tuple[Project, Applicant]:
+        project = self._project_service.find_project_by_name(application.project_name)
+        if not project: raise OperationError(f"Project '{application.project_name}' not found.")
+
+        handled_names = self._project_service.get_handled_project_names_for_officer(officer.nric)
+        if project.project_name not in handled_names:
+            raise OperationError(f"You do not handle project '{project.project_name}'.")
+
+        if application.status != ApplicationStatus.SUCCESSFUL:
+            raise OperationError(f"Application status must be SUCCESSFUL to book.")
+
+        applicant = self._user_repo.find_user_by_nric(application.applicant_nric)
+        if not applicant: raise IntegrityError(f"Applicant {application.applicant_nric} not found.")
+        # Ensure applicant is actually an Applicant instance if needed, though User should suffice
+        if not isinstance(applicant, Applicant): raise IntegrityError("User found is not an Applicant.")
+
+
+        # --- Manual Transaction ---
+        unit_decreased = False
+        try:
+            # 1. Decrease unit count in Project model
+            if not project.decrease_unit_count(application.flat_type):
+                application.set_status(ApplicationStatus.UNSUCCESSFUL)
+                self._app_repo.update(application) # Update app status immediately
+                # Defer save
+                raise OperationError(f"Booking failed: No {application.flat_type.to_string()} units available. Application marked unsuccessful.")
+            unit_decreased = True
+
+            # 2. Update Project in repository
+            self._project_service._project_repo.update(project)
+
+            # 3. Update Application status in model and repository
+            application.set_status(ApplicationStatus.BOOKED)
+            self._app_repo.update(application)
+
+            # If all steps successful, return data (saving deferred)
+            return project, applicant
+
+        except (OperationError, IntegrityError) as e:
+            # --- Rollback attempts (Best Effort) ---
+            print(f"ERROR during booking: {e}. Attempting rollback...")
+            # Revert application status in memory & repo
+            application.set_status(ApplicationStatus.SUCCESSFUL)
+            try: self._app_repo.update(application)
+            except Exception as rb_e: print(f"CRITICAL: Failed rollback app status: {rb_e}")
+
+            # Revert project unit count in memory & repo if decreased
+            if unit_decreased:
+                project.increase_unit_count(application.flat_type)
+                try: self._project_service._project_repo.update(project)
+                except Exception as rb_e: print(f"CRITICAL: Failed rollback project units: {rb_e}")
+
+            raise OperationError(f"Booking failed: {e}. Rollback attempted.") # Re-raise original error
+----
+# File name: service\auth_service.py
+from typing import Optional
+from .interfaces.iauth_service import IAuthService
+from repository.interfaces.iuser_repository import IUserRepository
+from model.user import User
+from common.enums import UserRole
+from common.exceptions import OperationError, DataSaveError
+from utils.input_util import InputUtil
+
+class AuthService(IAuthService):
+    """Handles authentication and password changes."""
+    def __init__(self, user_repository: IUserRepository):
+        self._user_repo = user_repository
+
+    def login(self, nric: str, password: str) -> User:
+        if not InputUtil.validate_nric(nric):
+            raise OperationError("Invalid NRIC format.")
+
+        user = self._user_repo.find_user_by_nric(nric)
+
+        if user and user.check_password(password):
+            return user
+        elif user:
+            raise OperationError("Incorrect password.")
+        else:
+            raise OperationError("NRIC not found.")
+
+    def change_password(self, user: User, new_password: str):
+        try:
+            # Validation happens within User model's method
+            user.change_password(new_password)
+            # Persist change via the facade
+            self._user_repo.save_user(user)
+        except (ValueError, OperationError) as e: # Catch validation errors
+            raise OperationError(f"Password change failed: {e}")
+        except DataSaveError as e: # Catch repo/facade save errors
+            # Attempting rollback here is complex without transactions.
+            # Log the error and inform the user the save failed.
+            print(f"ERROR: Failed to save new password for {user.nric}: {e}")
+            raise OperationError(f"Failed to save new password. Please try again later.")
+        except Exception as e:
+            print(f"Unexpected error during password change for {user.nric}: {e}")
+            raise OperationError("An unexpected error occurred during password change.")
+
+    def get_user_role(self, user: User) -> UserRole:
+        # Delegate to the user object itself
+        return user.get_role()
+----
+# File name: service\enquiry_service.py
+from typing import List, Optional
+from .interfaces.ienquiry_service import IEnquiryService
+from .interfaces.iproject_service import IProjectService # Use interface
+from repository.interfaces.ienquiry_repository import IEnquiryRepository
+from repository.interfaces.iuser_repository import IUserRepository
+from repository.interfaces.iapplication_repository import IApplicationRepository
+from model.enquiry import Enquiry
+from model.applicant import Applicant
+from model.user import User
+from model.project import Project
+from common.enums import UserRole
+from common.exceptions import OperationError, IntegrityError
+
+class EnquiryService(IEnquiryService):
+    """Handles business logic related to enquiries."""
+    def __init__(self, enquiry_repository: IEnquiryRepository,
+                 project_service: IProjectService,
+                 user_repository: IUserRepository,
+                 application_repository: IApplicationRepository):
+        self._enq_repo = enquiry_repository
+        self._project_service = project_service
+        self._user_repo = user_repository
+        self._app_repo = application_repository
+
+    def find_enquiry_by_id(self, enquiry_id: int) -> Optional[Enquiry]:
+        return self._enq_repo.find_by_id(enquiry_id)
+
+    def get_enquiries_by_applicant(self, applicant_nric: str) -> List[Enquiry]:
+        return sorted(self._enq_repo.find_by_applicant(applicant_nric), key=lambda e: e.enquiry_id)
+
+    def get_enquiries_for_project(self, project_name: str) -> List[Enquiry]:
+        return sorted(self._enq_repo.find_by_project(project_name), key=lambda e: e.enquiry_id)
+
+    def get_all_enquiries(self) -> List[Enquiry]:
+        return sorted(self._enq_repo.get_all(), key=lambda e: e.enquiry_id)
+
+    def submit_enquiry(self, applicant: Applicant, project: Project, text: str) -> Enquiry:
+        if not text or text.isspace():
+            raise OperationError("Enquiry text cannot be empty.")
+
+        # Check if applicant can view the project
+        current_app = self._app_repo.find_by_applicant_nric(applicant.nric)
+        viewable_projects = self._project_service.get_viewable_projects_for_applicant(applicant, current_app)
+        if project not in viewable_projects:
+             # Check if it's the project they applied for (should be viewable)
+             is_applied = current_app and current_app.project_name == project.project_name
+             if not is_applied:
+                  raise OperationError("You cannot submit an enquiry for a project you cannot view.")
+
+        try:
+            # Create enquiry with temporary ID 0, repository add assigns correct ID
+            new_enquiry = Enquiry(0, applicant.nric, project.project_name, text)
+            self._enq_repo.add(new_enquiry) # Add assigns ID
+            # Defer saving
+            return new_enquiry # Return enquiry with assigned ID
+        except (ValueError, IntegrityError) as e:
+            raise OperationError(f"Failed to submit enquiry: {e}")
+
+    def edit_enquiry(self, applicant: Applicant, enquiry: Enquiry, new_text: str):
+        if enquiry.applicant_nric != applicant.nric:
+            raise OperationError("You can only edit your own enquiries.")
+        try:
+            enquiry.set_text(new_text) # Model validates state (not replied) and text
+            self._enq_repo.update(enquiry)
+            # Defer saving
+        except (OperationError, ValueError, IntegrityError) as e:
+            # Reverting in-memory change is difficult without original text stored here.
+            raise OperationError(f"Failed to update enquiry: {e}")
+
+    def delete_enquiry(self, applicant: Applicant, enquiry: Enquiry):
+        if enquiry.applicant_nric != applicant.nric:
+            raise OperationError("You can only delete your own enquiries.")
+        if enquiry.is_replied():
+            raise OperationError("Cannot delete a replied enquiry.")
+
+        try:
+            self._enq_repo.delete_by_id(enquiry.enquiry_id)
+            # Defer saving
+        except IntegrityError as e:
+            raise OperationError(f"Failed to delete enquiry: {e}")
+
+    def reply_to_enquiry(self, replier_user: User, enquiry: Enquiry, reply_text: str):
+        if not reply_text or reply_text.isspace():
+            raise OperationError("Reply text cannot be empty.")
+        if enquiry.is_replied():
+             raise OperationError("This enquiry has already been replied to.")
+
+        project = self._project_service.find_project_by_name(enquiry.project_name)
+        if not project: raise OperationError(f"Project '{enquiry.project_name}' not found.")
+
+        user_role = replier_user.get_role()
+        can_reply = False
+        role_str = ""
+
+        if user_role == UserRole.HDB_MANAGER and project.manager_nric == replier_user.nric:
+            can_reply = True; role_str = "Manager"
+        elif user_role == UserRole.HDB_OFFICER:
+            handled = self._project_service.get_handled_project_names_for_officer(replier_user.nric)
+            if project.project_name in handled:
+                can_reply = True; role_str = "Officer"
+
+        if not can_reply:
+             raise OperationError("You do not have permission to reply to this enquiry.")
+
+        formatted_reply = f"[{role_str} - {replier_user.name}]: {reply_text}"
+        try:
+            enquiry.set_reply(formatted_reply)
+            self._enq_repo.update(enquiry)
+            # Defer saving
+        except (ValueError, IntegrityError) as e:
+            # enquiry.set_reply("") # Revert attempt
+            raise OperationError(f"Failed to save reply: {e}")
+----
+# File name: service\project_service.py
+from typing import List, Optional, Dict, Set
+from datetime import date
+from .interfaces.iproject_service import IProjectService
+from repository.interfaces.iproject_repository import IProjectRepository
+from repository.interfaces.iregistration_repository import IRegistrationRepository
+from model.project import Project
+from model.hdb_manager import HDBManager
+from model.applicant import Applicant
+from model.application import Application
+from common.enums import UserRole, FlatType, RegistrationStatus
+from common.exceptions import OperationError, IntegrityError, DataSaveError
+from utils.input_util import InputUtil
+from utils.date_util import DateUtil
+
+class ProjectService(IProjectService):
+    """Handles business logic related to projects."""
+    def __init__(self, project_repository: IProjectRepository,
+                 registration_repository: IRegistrationRepository):
+        self._project_repo = project_repository
+        self._reg_repo = registration_repository # Needed for officer overlap checks
+
+    def find_project_by_name(self, name: str) -> Optional[Project]:
+        return self._project_repo.find_by_name(name)
+
+    def get_all_projects(self) -> List[Project]:
+        return sorted(self._project_repo.get_all(), key=lambda p: p.project_name)
+
+    def get_projects_by_manager(self, manager_nric: str) -> List[Project]:
+        if not InputUtil.validate_nric(manager_nric): return []
+        return sorted(
+            [p for p in self.get_all_projects() if p.manager_nric == manager_nric],
+            key=lambda p: p.project_name
+        )
+
+    def get_handled_project_names_for_officer(self, officer_nric: str) -> Set[str]:
+        """Gets names of projects an officer is directly assigned to."""
+        if not InputUtil.validate_nric(officer_nric): return set()
+        return {p.project_name for p in self.get_all_projects() if officer_nric in p.officer_nrics}
+
+    def get_viewable_projects_for_applicant(self, applicant: Applicant, current_application: Optional[Application] = None) -> List[Project]:
+        """Gets projects viewable by an applicant based on rules."""
+        viewable = []
+        app_proj_name = current_application.project_name if current_application else None
+        is_single = applicant.marital_status == "Single"
+        is_married = applicant.marital_status == "Married"
+
+        for project in self.get_all_projects():
+            if project.project_name == app_proj_name: # Always show applied project
+                viewable.append(project); continue
+            if not project.is_currently_visible_and_active(): continue # Must be visible & active
+
+            units2, _ = project.get_flat_details(FlatType.TWO_ROOM)
+            units3, _ = project.get_flat_details(FlatType.THREE_ROOM)
+            eligible = False
+            if is_single and applicant.age >= 35 and units2 > 0: eligible = True
+            elif is_married and applicant.age >= 21 and (units2 > 0 or units3 > 0): eligible = True
+
+            if eligible: viewable.append(project)
+
+        # Ensure uniqueness and sort
+        unique_viewable = {p.project_name: p for p in viewable}
+        return sorted(list(unique_viewable.values()), key=lambda p: p.project_name)
+
+    def filter_projects(self, projects: List[Project], location: Optional[str] = None, flat_type_str: Optional[str] = None) -> List[Project]:
+        """Filters a list of projects based on criteria."""
+        filtered = list(projects)
+        if location:
+            filtered = [p for p in filtered if p.neighborhood.lower() == location.lower()]
+        if flat_type_str:
+            try:
+                target_flat_type = FlatType.from_value(flat_type_str)
+                filtered = [p for p in filtered if p.get_flat_details(target_flat_type)[0] > 0]
+            except ValueError:
+                print(f"Warning: Invalid flat type filter '{flat_type_str}'. Ignoring.")
+        return filtered
+
+    def _check_manager_project_overlap(self, manager_nric: str, od: date, cd: date, exclude_name: Optional[str] = None):
+        """Checks if a manager has another project active during the given period."""
+        for p in self.get_projects_by_manager(manager_nric):
+            if exclude_name and p.project_name == exclude_name: continue
+            if p.opening_date and p.closing_date:
+                 if DateUtil.dates_overlap(od, cd, p.opening_date, p.closing_date):
+                    raise OperationError(f"Manager handles overlapping project '{p.project_name}' ({DateUtil.format_date(p.opening_date)} - {DateUtil.format_date(p.closing_date)}).")
+
+    def create_project(self, manager: HDBManager, name: str, neighborhood: str, n1: int, p1: int, n2: int, p2: int, od: date, cd: date, slot: int) -> Project:
+        if self.find_project_by_name(name):
+            raise OperationError(f"Project name '{name}' already exists.")
+        self._check_manager_project_overlap(manager.nric, od, cd) # Check overlap
+
+        try:
+            new_project = Project(
+                project_name=name, neighborhood=neighborhood, num_units1=n1, price1=p1,
+                num_units2=n2, price2=p2, opening_date=od, closing_date=cd,
+                manager_nric=manager.nric, officer_slot=slot, visibility=True
+            )
+            self._project_repo.add(new_project)
+            # Defer saving to PersistenceManager or explicit call
+            return new_project
+        except ValueError as e: raise OperationError(f"Failed to create project: {e}")
+        except IntegrityError as e: raise OperationError(f"Failed to add project: {e}")
+
+    def edit_project(self, manager: HDBManager, project: Project, updates: Dict):
+        if project.manager_nric != manager.nric:
+            raise OperationError("You can only edit projects you manage.")
+
+        original_name = project.project_name
+        new_name = updates.get('project_name', original_name)
+        if new_name != original_name and self.find_project_by_name(new_name):
+            raise OperationError(f"Project name '{new_name}' already exists.")
+
+        new_od = updates.get('opening_date', project.opening_date)
+        new_cd = updates.get('closing_date', project.closing_date)
+        if new_od != project.opening_date or new_cd != project.closing_date:
+             self._check_manager_project_overlap(manager.nric, new_od, new_cd, exclude_name=original_name)
+
+        try:
+            # Apply updates using Project's method (includes validation)
+            project.update_details(updates)
+
+            # Handle repository update (delete old key, add new if name changed)
+            if project.project_name != original_name:
+                self._project_repo.delete(original_name) # Must delete before adding new key
+                self._project_repo.add(project)
+            else:
+                self._project_repo.update(project)
+            # Defer saving
+        except ValueError as e: raise OperationError(f"Failed to update project: {e}")
+        except IntegrityError as e: raise OperationError(f"Failed to update project in repository: {e}")
+
+    def delete_project(self, manager: HDBManager, project: Project):
+        if project.manager_nric != manager.nric:
+            raise OperationError("You can only delete projects you manage.")
+        try:
+            self._project_repo.delete_by_name(project.project_name)
+            # Defer saving
+        except IntegrityError as e: raise OperationError(f"Failed to delete project: {e}")
+
+    def toggle_project_visibility(self, manager: HDBManager, project: Project) -> str:
+        if project.manager_nric != manager.nric:
+            raise OperationError("You can only toggle visibility for projects you manage.")
+        try:
+            project.set_visibility(not project.visibility)
+            self._project_repo.update(project)
+            # Defer saving
+            return "ON" if project.visibility else "OFF"
+        except IntegrityError as e:
+            project.set_visibility(not project.visibility) # Revert in-memory change
+            raise OperationError(f"Failed to update project visibility: {e}")
+
+    def add_officer_to_project(self, project: Project, officer_nric: str) -> bool:
+        """Adds officer NRIC to project list. Assumes caller handles permissions."""
+        try:
+            # Project model handles validation (NRIC format, slots, uniqueness)
+            if project.add_officer(officer_nric):
+                self._project_repo.update(project) # Update repo state
+                # Defer saving
+                return True
+            return False # Should not happen if add_officer raises OperationError on failure
+        except (ValueError, OperationError) as e:
+             raise OperationError(f"Cannot add officer: {e}")
+        except IntegrityError as e:
+             raise OperationError(f"Failed to update project after adding officer: {e}")
+
+    def remove_officer_from_project(self, project: Project, officer_nric: str) -> bool:
+        """Removes officer NRIC from project list. Assumes caller handles permissions."""
+        try:
+            if project.remove_officer(officer_nric):
+                self._project_repo.update(project)
+                # Defer saving
+                return True
+            return False # Officer not found on project
+        except IntegrityError as e:
+             raise OperationError(f"Failed to update project after removing officer: {e}")
+----
+# File name: service\registration_service.py
+from typing import List, Optional
+from .interfaces.iregistration_service import IRegistrationService
+from .interfaces.iproject_service import IProjectService # Use interface
+from repository.interfaces.iregistration_repository import IRegistrationRepository
+from repository.interfaces.iapplication_repository import IApplicationRepository
+from model.registration import Registration
+from model.hdb_officer import HDBOfficer
+from model.hdb_manager import HDBManager
+from model.project import Project
+from common.enums import RegistrationStatus
+from common.exceptions import OperationError, IntegrityError
+from utils.date_util import DateUtil
+
+class RegistrationService(IRegistrationService):
+    """Handles business logic related to HDB Officer registrations."""
+    def __init__(self, registration_repository: IRegistrationRepository,
+                 project_service: IProjectService,
+                 application_repository: IApplicationRepository):
+        self._reg_repo = registration_repository
+        self._project_service = project_service
+        self._app_repo = application_repository
+
+    def find_registration(self, officer_nric: str, project_name: str) -> Optional[Registration]:
+        return self._reg_repo.find_by_officer_and_project(officer_nric, project_name)
+
+    def get_registrations_by_officer(self, officer_nric: str) -> List[Registration]:
+        return self._reg_repo.find_by_officer(officer_nric)
+
+    def get_registrations_for_project(self, project_name: str, status_filter: Optional[RegistrationStatus] = None) -> List[Registration]:
+        return self._reg_repo.find_by_project(project_name, status_filter)
+
+    def _check_officer_registration_eligibility(self, officer: HDBOfficer, project: Project):
+        """Checks if an officer can register. Raises OperationError if ineligible."""
+        if self.find_registration(officer.nric, project.project_name):
+            raise OperationError(f"Already registered for project '{project.project_name}'.")
+        if project.manager_nric == officer.nric:
+            raise OperationError("Managers cannot register as officers for their own projects.")
+        # Check if officer ever applied for this project
+        if any(app.project_name == project.project_name for app in self._app_repo.find_all_by_applicant_nric(officer.nric)):
+             raise OperationError("Cannot register for a project you have previously applied for.")
+
+        # Check for overlapping approved registrations
+        target_od, target_cd = project.opening_date, project.closing_date
+        if not target_od or not target_cd: raise OperationError("Target project has invalid dates.")
+
+        for reg in self.get_registrations_by_officer(officer.nric):
+             if reg.status == RegistrationStatus.APPROVED:
+                 other_project = self._project_service.find_project_by_name(reg.project_name)
+                 if other_project and other_project.opening_date and other_project.closing_date:
+                     if DateUtil.dates_overlap(target_od, target_cd, other_project.opening_date, other_project.closing_date):
+                         raise OperationError(f"Overlaps with approved registration for '{other_project.project_name}'.")
+
+    def officer_register_for_project(self, officer: HDBOfficer, project: Project) -> Registration:
+        self._check_officer_registration_eligibility(officer, project)
+        new_registration = Registration(officer.nric, project.project_name)
+        try:
+            self._reg_repo.add(new_registration)
+            # Defer saving
+            return new_registration
+        except IntegrityError as e: raise OperationError(f"Failed to submit registration: {e}")
+
+    def _manager_can_manage_reg(self, manager: HDBManager, registration: Registration) -> bool:
+        project = self._project_service.find_project_by_name(registration.project_name)
+        return project is not None and project.manager_nric == manager.nric
+
+    def manager_approve_officer_registration(self, manager: HDBManager, registration: Registration):
+        if not self._manager_can_manage_reg(manager, registration):
+            raise OperationError("You do not manage this project.")
+        if registration.status != RegistrationStatus.PENDING:
+            raise OperationError(f"Registration status is not PENDING.")
+
+        project = self._project_service.find_project_by_name(registration.project_name)
+        if not project: raise OperationError(f"Project '{registration.project_name}' not found.")
+        if not project.can_add_officer():
+            raise OperationError(f"No available officer slots in project '{project.project_name}'.")
+
+        # Final overlap check at time of approval
+        target_od, target_cd = project.opening_date, project.closing_date
+        if not target_od or not target_cd: raise OperationError("Project has invalid dates.")
+        for other_reg in self.get_registrations_by_officer(registration.officer_nric):
+            if other_reg != registration and other_reg.status == RegistrationStatus.APPROVED:
+                other_project = self._project_service.find_project_by_name(other_reg.project_name)
+                if other_project and other_project.opening_date and other_project.closing_date:
+                    if DateUtil.dates_overlap(target_od, target_cd, other_project.opening_date, other_project.closing_date):
+                        raise OperationError(f"Officer approved for overlapping project '{other_project.project_name}'.")
+
+        # --- Manual Transaction ---
+        officer_added = False
+        try:
+            # 1. Add officer to project (ProjectService handles repo update)
+            self._project_service.add_officer_to_project(project, registration.officer_nric)
+            officer_added = True
+
+            # 2. Update registration status
+            registration.set_status(RegistrationStatus.APPROVED)
+            self._reg_repo.update(registration)
+            # Defer saving
+
+        except (OperationError, IntegrityError) as e:
+            # --- Rollback attempts ---
+            print(f"ERROR during registration approval: {e}. Attempting rollback...")
+            registration.set_status(RegistrationStatus.PENDING) # Revert status in memory
+            try: self._reg_repo.update(registration) # Attempt to update repo
+            except Exception as rb_e: print(f"Warning: Failed rollback reg status: {rb_e}")
+
+            if officer_added: # If officer was added to project, try removing
+                 try:
+                     self._project_service.remove_officer_from_project(project, registration.officer_nric)
+                 except Exception as rb_e: print(f"CRITICAL: Failed rollback officer from project: {rb_e}")
+
+            raise OperationError(f"Approval failed: {e}. Rollback attempted.")
+
+    def manager_reject_officer_registration(self, manager: HDBManager, registration: Registration):
+        if not self._manager_can_manage_reg(manager, registration):
+            raise OperationError("You do not manage this project.")
+        if registration.status != RegistrationStatus.PENDING:
+            raise OperationError(f"Registration status is not PENDING.")
+
+        try:
+            registration.set_status(RegistrationStatus.REJECTED)
+            self._reg_repo.update(registration)
+            # Defer saving
+        except IntegrityError as e:
+            # registration.set_status(RegistrationStatus.PENDING) # Revert attempt
+            raise OperationError(f"Failed to save registration rejection: {e}")
+----
+# File name: service\report_service.py
+from typing import List, Dict, Optional
+from .interfaces.ireport_service import IReportService
+from .interfaces.iproject_service import IProjectService # Use interface
+from repository.interfaces.iapplication_repository import IApplicationRepository
+from repository.interfaces.iuser_repository import IUserRepository
+from common.enums import ApplicationStatus, FlatType
+
+class ReportService(IReportService):
+    """Handles generation of reports."""
+    def __init__(self, application_repository: IApplicationRepository,
+                 project_service: IProjectService,
+                 user_repository: IUserRepository):
+        self._app_repo = application_repository
+        self._project_service = project_service
+        self._user_repo = user_repository
+
+    def generate_booking_report_data(self, filter_project_name: Optional[str] = None,
+                                     filter_flat_type_str: Optional[str] = None,
+                                     filter_marital: Optional[str] = None) -> List[Dict]:
+        """Generates data for the booking report based on filters."""
+        report_data = []
+        booked_apps = [app for app in self._app_repo.get_all() if app.status == ApplicationStatus.BOOKED]
+
+        filter_flat_type: Optional[FlatType] = None
+        if filter_flat_type_str:
+            try: filter_flat_type = FlatType.from_value(filter_flat_type_str)
+            except ValueError: pass # Ignore invalid filter
+
+        filter_marital_lower = filter_marital.lower() if filter_marital else None
+
+        for app in booked_apps:
+            project = self._project_service.find_project_by_name(app.project_name)
+            applicant = self._user_repo.find_user_by_nric(app.applicant_nric)
+
+            if not project or not applicant:
+                print(f"Warning: Skipping report entry for application {app.applicant_nric}-{app.project_name} due to missing project/applicant.")
+                continue
+
+            # Apply filters
+            if filter_project_name and project.project_name.lower() != filter_project_name.lower(): continue
+            if filter_flat_type and app.flat_type != filter_flat_type: continue
+            if filter_marital_lower and applicant.marital_status.lower() != filter_marital_lower: continue
+
+            report_data.append({
+                "NRIC": app.applicant_nric,
+                "Applicant Name": applicant.name,
+                "Age": applicant.age,
+                "Marital Status": applicant.marital_status,
+                "Flat Type": app.flat_type.to_string(),
+                "Project Name": project.project_name,
+                "Neighborhood": project.neighborhood
+            })
+
+        # Sort report data
+        report_data.sort(key=lambda x: (x["Project Name"], x["Applicant Name"]))
+        return report_data
+----
+# File name: service\__init__.py
+
+----
+# File name: utils\date_util.py
+from datetime import datetime, date
+
+class DateUtil:
+    """Handles date parsing and formatting."""
+    DATE_FORMAT = "%Y-%m-%d"
+
+    @staticmethod
+    def parse_date(date_str: str | None) -> date | None:
+        """Parses a date string into a date object."""
+        if not date_str:
+            return None
+        try:
+            return datetime.strptime(date_str, DateUtil.DATE_FORMAT).date()
+        except ValueError:
+            return None # Indicate parsing failure
+
+    @staticmethod
+    def format_date(date_obj: date | None) -> str:
+        """Formats a date object into a string."""
+        if date_obj is None:
+            return ""
+        return date_obj.strftime(DateUtil.DATE_FORMAT)
+
+    @staticmethod
+    def dates_overlap(start1: date, end1: date, start2: date, end2: date) -> bool:
+        """Checks if two date ranges overlap."""
+        if not all([start1, end1, start2, end2]):
+            # If any date is missing, assume no overlap for safety
+            return False
+        # Ensure start <= end for comparison
+        s1, e1 = min(start1, end1), max(start1, end1)
+        s2, e2 = min(start2, end2), max(start2, end2)
+        # Overlap occurs if one period starts before the other ends,
+        # and ends after the other starts.
+        return s1 <= e2 and s2 <= e1
+----
+# File name: utils\input_util.py
+from .date_util import DateUtil # Use the dedicated DateUtil
+from datetime import date
+
+class InputUtil:
+    """Handles validated user input."""
+
+    @staticmethod
+    def validate_nric(nric: str) -> bool:
+        """Validates the format of a Singapore NRIC."""
+        if not isinstance(nric, str) or len(nric) != 9:
+            return False
+        first_char = nric[0].upper()
+        if first_char not in ('S', 'T'):
+            return False
+        if not nric[1:8].isdigit():
+            return False
+        if not nric[8].isalpha():
+            return False
+        return True
+
+    @staticmethod
+    def get_valid_integer_input(prompt: str, min_val: int | None = None, max_val: int | None = None) -> int:
+        """Gets integer input within optional bounds."""
+        while True:
+            try:
+                value_str = input(f"{prompt}: ").strip()
+                value = int(value_str)
+                if (min_val is not None and value < min_val) or \
+                   (max_val is not None and value > max_val):
+                    range_msg = ""
+                    if min_val is not None and max_val is not None:
+                        range_msg = f" between {min_val} and {max_val}"
+                    elif min_val is not None:
+                        range_msg = f" >= {min_val}"
+                    elif max_val is not None:
+                        range_msg = f" <= {max_val}"
+                    print(f"ERROR: Input must be an integer{range_msg}.")
+                else:
+                    return value
+            except ValueError:
+                print("ERROR: Invalid input. Please enter an integer.")
+            except KeyboardInterrupt:
+                print("\nInput cancelled by user.")
+                raise # Re-raise to allow higher levels to catch
+
+    @staticmethod
+    def get_valid_date_input(prompt: str) -> date:
+        """Gets date input in the standard format."""
+        while True:
+            date_str = input(f"{prompt} ({DateUtil.DATE_FORMAT}): ").strip()
+            parsed_date = DateUtil.parse_date(date_str)
+            if parsed_date:
+                return parsed_date
+            else:
+                print(f"ERROR: Invalid date format. Please use {DateUtil.DATE_FORMAT}.")
+            # Allow KeyboardInterrupt to propagate
+
+    @staticmethod
+    def get_non_empty_input(prompt: str) -> str:
+        """Gets input that is not empty or just whitespace."""
+        while True:
+            value = input(f"{prompt}: ").strip()
+            if value:
+                return value
+            else:
+                print("ERROR: Input cannot be empty.")
+            # Allow KeyboardInterrupt to propagate
+
+    @staticmethod
+    def get_yes_no_input(prompt: str) -> bool:
+        """Gets a 'y' or 'n' response."""
+        while True:
+            choice = input(f"{prompt} (y/n): ").strip().lower()
+            if choice == 'y':
+                return True
+            elif choice == 'n':
+                return False
+            print("ERROR: Please enter 'y' or 'n'.")
+            # Allow KeyboardInterrupt to propagate
+----
+# File name: utils\__init__.py
+
+----
+# File name: view\application_view.py
+from typing import List, Optional
+from .base_view import BaseView
+from model.application import Application
+from model.project import Project
+from model.user import User # For applicant details
+from model.applicant import Applicant # Specifically for type hint
+from common.enums import FlatType
+from repository.interfaces.iuser_repository import IUserRepository # For lookup in select
+from utils.input_util import InputUtil
+
+class ApplicationView(BaseView):
+    """View specific to displaying application information."""
+
+    def display_application_summary(self, application: Application, applicant_name: str):
+         """Displays a brief summary of an application for lists."""
+         # Use model's display method
+         print(application.get_display_summary(applicant_name))
+
+    def display_application_details(self, application: Application, project: Project, applicant: User):
+        """Displays detailed status of a specific application."""
+        details = {
+            "Applicant": f"{applicant.name} ({applicant.nric})",
+            "Age": applicant.age,
+            "Marital Status": applicant.marital_status,
+            "Project": f"{project.project_name} ({project.neighborhood})",
+            "Flat Type Applied For": application.flat_type.to_string(),
+            "Application Status": application.status.value
+        }
+        if application.request_withdrawal:
+            details["Withdrawal Requested"] = "Yes (Pending Manager Action)"
+
+        self.display_dict("BTO Application Status", details)
+
+    def select_application(self, applications: List[Application], user_repo: IUserRepository, action_verb: str = "view") -> Optional[Application]:
+        """Displays a list of applications and prompts for selection."""
+        if not applications:
+            self.display_message("No applications available for selection.", info=True)
+            return None
+
+        print(f"\n--- Select Application to {action_verb} ---")
+        app_map = {} # Map 1-based index to application object
+        for i, app in enumerate(applications):
+            applicant = user_repo.find_user_by_nric(app.applicant_nric)
+            applicant_name = applicant.name if applicant else "Unknown Applicant"
+            print(f"{i + 1}. ", end="")
+            self.display_application_summary(app, applicant_name) # Use summary
+            app_map[i + 1] = app
+        print(" 0. Cancel")
+        print("------------------------------------")
+
+        while True:
+            choice = InputUtil.get_valid_integer_input("Enter the number of the application (or 0 to cancel)", min_val=0, max_val=len(applications))
+            if choice == 0: return None
+            selected_app = app_map.get(choice)
+            if selected_app: return selected_app
+            self.display_message("Invalid selection.", error=True)
+
+    def prompt_flat_type_selection(self, project: Project, applicant: Applicant) -> Optional[FlatType]:
+        """Prompts the applicant to select a flat type based on eligibility and availability."""
+        available_types = []
+        is_single = applicant.marital_status == "Single"
+        is_married = applicant.marital_status == "Married"
+
+        units2, _ = project.get_flat_details(FlatType.TWO_ROOM)
+        units3, _ = project.get_flat_details(FlatType.THREE_ROOM)
+
+        if units2 > 0 and ((is_single and applicant.age >= 35) or (is_married and applicant.age >= 21)):
+            available_types.append(FlatType.TWO_ROOM)
+        if units3 > 0 and (is_married and applicant.age >= 21):
+            available_types.append(FlatType.THREE_ROOM)
+
+        if not available_types:
+            self.display_message("No suitable or available flat types for you in this project.", error=True)
+            return None
+        elif len(available_types) == 1:
+            selected_type = available_types[0]
+            self.display_message(f"Automatically selecting {selected_type.to_string()} flat (only option).", info=True)
+            return selected_type
+        else:
+            options_str = ' or '.join(str(ft.value) for ft in available_types)
+            while True:
+                choice_str = self.get_input(f"Select flat type ({options_str})")
+                try:
+                    choice_enum = FlatType.from_value(choice_str) # Use enum helper
+                    if choice_enum in available_types:
+                        return choice_enum
+                    else:
+                        self.display_message(f"Invalid choice. Please enter one of: {options_str}", error=True)
+                except (ValueError, TypeError):
+                    self.display_message("Invalid input. Please enter a number (2 or 3).", error=True)
+----
+# File name: view\auth_view.py
+from .base_view import BaseView
+
+class AuthView(BaseView):
+    """View specific to authentication actions."""
+
+    def prompt_login(self) -> tuple[str, str]:
+        """Prompts for NRIC and password."""
+        self.display_message("\n--- Login ---", info=True)
+        nric = self.get_input("Enter NRIC")
+        password = self.get_password()
+        return nric, password
+
+    def prompt_change_password(self) -> str | None:
+        """Prompts for new password and confirmation. Returns new password if match."""
+        self.display_message("\n--- Change Password ---", info=True)
+        # Note: Verification of the *current* password should happen in the Action/Controller
+        # This view only collects the *new* password details.
+
+        new_pwd = self.get_password("Enter your new password")
+        confirm_pwd = self.get_password("Confirm your new password")
+
+        if not new_pwd:
+            self.display_message("New password cannot be empty.", error=True)
+            return None
+        if new_pwd != confirm_pwd:
+            self.display_message("New passwords do not match.", error=True)
+            return None
+
+        # Return the validated new password
+        return new_pwd
+----
+# File name: view\base_view.py
+from typing import List, Dict, Any, Optional
+from utils.input_util import InputUtil # Corrected import path
+
+class BaseView:
+    """Base class for all views. Handles basic input and output."""
+
+    def display_message(self, message: str, error: bool = False, info: bool = False, warning: bool = False):
+        """Displays a formatted message."""
+        prefix = ""
+        if error: prefix = "ERROR: "
+        elif warning: prefix = "WARNING: "
+        elif info: prefix = "INFO: "
+        print(f"\n{prefix}{message}")
+
+    def get_input(self, prompt: str) -> str:
+        """Gets basic string input from the user."""
+        # Use InputUtil for potentially more robust input handling if needed later
+        return input(f"{prompt}: ").strip()
+
+    def get_password(self, prompt: str = "Enter password") -> str:
+        """Gets password input (simple text input for CLI)."""
+        # Consider getpass library if masking is strictly required and allowed
+        return input(f"{prompt}: ").strip()
+
+    def display_menu(self, title: str, options: List[str]) -> Optional[int]:
+        """Displays a numbered menu and gets a valid choice (1-based index)."""
+        print(f"\n--- {title} ---")
+        if not options:
+            print("No options available.")
+            return None
+
+        valid_indices = []
+        offset = 0
+        for i, option in enumerate(options):
+            if option.startswith("---"): # Handle separators
+                print(f"  {option}")
+                offset += 1
+            else:
+                print(f"{i + 1 - offset}. {option}")
+                valid_indices.append(i + 1 - offset) # Store 1-based index of valid options
+
+        print("--------------------")
+
+        if not valid_indices: # Only separators were present
+             print("No actionable options available.")
+             return None
+
+        # Use InputUtil for validated integer input within the range of valid options
+        min_choice = min(valid_indices) if valid_indices else 1
+        max_choice = max(valid_indices) if valid_indices else 0 # Will cause validation to fail if no valid options
+
+        if max_choice == 0: return None # No valid options to choose from
+
+        # Loop until a valid *actionable* choice is made
+        while True:
+            choice = InputUtil.get_valid_integer_input("Enter your choice", min_val=min_choice, max_val=max_choice)
+            if choice in valid_indices:
+                return choice # Return the 1-based index of the chosen *actionable* item
+            else:
+                # This case should ideally not be reached if menu display logic is correct
+                self.display_message("Please select one of the numbered options.", warning=True)
+
+
+    def display_list(self, title: str, items: List[Any], empty_message: str = "No items to display."):
+        """Displays a numbered list of items using their string representation."""
+        print(f"\n--- {title} ---")
+        if not items:
+            print(empty_message)
+        else:
+            for i, item in enumerate(items):
+                # Attempt to use a specific display method if available, else __str__
+                display_str = str(item)
+                if hasattr(item, 'get_display_summary') and callable(item.get_display_summary):
+                    display_str = item.get_display_summary()
+                elif hasattr(item, 'get_display_details') and callable(item.get_display_details):
+                     display_str = item.get_display_details() # Fallback if summary not present
+
+                print(f"{i + 1}. {display_str}")
+        print("--------------------")
+
+    def display_dict(self, title: str, data_dict: Dict[str, Any]):
+        """Displays key-value pairs from a dictionary, aligned."""
+        print(f"\n--- {title} ---")
+        if not data_dict:
+            print("(No details)")
+        else:
+            max_key_len = 0
+            if data_dict:
+                 try:
+                      max_key_len = max(len(str(k)) for k in data_dict.keys())
+                 except ValueError: # Handle empty dict case
+                      max_key_len = 0
+
+            for key, value in data_dict.items():
+                # Handle multi-line values gracefully
+                value_lines = str(value).splitlines()
+                print(f"  {str(key):<{max_key_len}} : {value_lines[0]}")
+                for line in value_lines[1:]:
+                    print(f"  {' ' * (max_key_len + 3)}{line}") # Indent subsequent lines
+
+        print("-" * (len(title) + 6))
+
+    def pause_for_user(self):
+        """Pauses execution until the user presses Enter."""
+        input("\nPress Enter to continue...")
+----
+# File name: view\enquiry_view.py
+from typing import List, Optional
+from .base_view import BaseView
+from model.enquiry import Enquiry
+from utils.input_util import InputUtil
+
+class EnquiryView(BaseView):
+    """View specific to displaying and interacting with enquiries."""
+
+    def display_enquiry_summary(self, enquiry: Enquiry):
+         """Displays a brief summary of an enquiry for lists."""
+         # Use model's display method
+         print(enquiry.get_display_summary())
+
+    def display_enquiry_details(self, enquiry: Enquiry, project_name: str, applicant_name: str):
+        """Displays the full details of an enquiry."""
+        details = {
+            "Enquiry ID": enquiry.enquiry_id,
+            "Project": project_name, # Use provided name
+            "Submitted by": f"{applicant_name} ({enquiry.applicant_nric})",
+            "Enquiry Text": enquiry.text,
+            "Reply": enquiry.reply if enquiry.is_replied() else "(No reply yet)"
+        }
+        self.display_dict(f"Enquiry Details", details)
+
+    def select_enquiry(self, enquiries: List[Enquiry], action_verb: str = "view") -> Optional[Enquiry]:
+        """Displays a list of enquiries and prompts for selection by ID."""
+        if not enquiries:
+            self.display_message("No enquiries available for selection.", info=True)
+            return None
+
+        print(f"\n--- Select Enquiry (by ID) to {action_verb} ---")
+        enquiry_map = {} # Map ID to enquiry object
+        for enq in enquiries:
+            self.display_enquiry_summary(enq) # Use summary
+            enquiry_map[enq.enquiry_id] = enq
+        print("  ID: 0    | Cancel")
+        print("--------------------------------------------------")
+
+        while True:
+            enquiry_id = InputUtil.get_valid_integer_input("Enter the ID of the enquiry (or 0 to cancel)", min_val=0)
+            if enquiry_id == 0: return None
+            selected_enq = enquiry_map.get(enquiry_id)
+            if selected_enq: return selected_enq
+            self.display_message("Invalid enquiry ID.", error=True)
+
+    def prompt_enquiry_text(self, current_text: Optional[str] = None) -> Optional[str]:
+        """Prompts for enquiry text (new or edit)."""
+        prompt = "Enter enquiry text"
+        if current_text:
+            preview = (current_text[:30] + '...') if len(current_text) > 33 else current_text
+            prompt = f"Enter new enquiry text (current: '{preview}')"
+        try:
+            # Use InputUtil for non-empty validation
+            return InputUtil.get_non_empty_input(prompt)
+        except KeyboardInterrupt:
+             self.display_message("\nInput cancelled.")
+             return None
+
+    def prompt_reply_text(self) -> Optional[str]:
+        """Prompts for reply text."""
+        try:
+            # Use InputUtil for non-empty validation
+            return InputUtil.get_non_empty_input("Enter reply text")
+        except KeyboardInterrupt:
+             self.display_message("\nInput cancelled.")
+             return None
+----
+# File name: view\manager_view.py
+from .base_view import BaseView
+from model.registration import Registration
+from model.application import Application
+from model.project import Project
+from model.user import User # For applicant/officer details
+from common.enums import FlatType
+
+class ManagerView(BaseView):
+     """View specific to HDB Manager actions."""
+     # Inherits display methods from BaseView.
+     # Adds specific display formats for approval contexts.
+
+     def display_officer_registration_for_approval(self, registration: Registration, officer: User, project: Project):
+          """Displays registration details specifically in the context of approval/rejection."""
+          print("\n--- Officer Registration for Review ---")
+          details = {
+              "Project": f"{project.project_name} ({project.neighborhood})",
+              "Officer": f"{officer.name} ({officer.nric})",
+              "Current Status": registration.status.value,
+              "Project Officer Slots": f"{len(project.officer_nrics)} / {project.officer_slot}"
+          }
+          self.display_dict("Registration Details", details) # Use standard dict display
+          print("---------------------------------------")
+
+     def display_application_for_approval(self, application: Application, applicant: User, project: Project):
+           """Displays application details specifically in the context of approval/rejection."""
+           print("\n--- Application for Review ---")
+           units, _ = project.get_flat_details(application.flat_type)
+           details = {
+               "Applicant": f"{applicant.name} ({applicant.nric})",
+               "Project": project.project_name,
+               "Flat Type": application.flat_type.to_string(),
+               "Current Status": application.status.value,
+               f"Units Remaining ({application.flat_type.to_string()})": units
+           }
+           if application.request_withdrawal:
+                details["** Withdrawal Requested **"] = "Yes"
+           self.display_dict("Application Details", details)
+           print("-----------------------------")
+
+     def display_withdrawal_request_for_approval(self, application: Application, applicant: User, project: Project):
+           """Displays withdrawal request details specifically in the context of approval/rejection."""
+           print("\n--- Withdrawal Request for Review ---")
+           details = {
+               "Applicant": f"{applicant.name} ({applicant.nric})",
+               "Project": project.project_name,
+               "Flat Type": application.flat_type.to_string(),
+               "Current Status": application.status.value,
+               "** Withdrawal Requested **": "YES"
+           }
+           self.display_dict("Withdrawal Request Details", details)
+           print("------------------------------------")
+----
+# File name: view\officer_view.py
+from typing import List, Optional, Dict, Any
+from .base_view import BaseView
+from model.registration import Registration
+from repository.interfaces.iuser_repository import IUserRepository # For lookup in select
+from utils.input_util import InputUtil
+
+class OfficerView(BaseView):
+    """View specific to HDB Officer actions (beyond Applicant actions)."""
+
+    def display_registration_summary(self, registration: Registration, officer_name: str):
+         """Displays a brief summary of an officer registration."""
+         # Use model's display method
+         print(registration.get_display_summary(officer_name))
+
+    def display_registration_details(self, registration: Registration, project_name: str, officer_name: str):
+        """Displays details of an officer's registration."""
+        details = {
+            "Officer": f"{officer_name} ({registration.officer_nric})",
+            "Project": project_name, # Use provided name
+            "Registration Status": registration.status.value
+        }
+        self.display_dict("Officer Registration Details", details)
+
+    def select_registration(self, registrations: List[Registration], user_repo: IUserRepository, action_verb: str = "view") -> Optional[Registration]:
+        """Displays a list of registrations and prompts for selection."""
+        if not registrations:
+            self.display_message("No registrations available for selection.", info=True)
+            return None
+
+        print(f"\n--- Select Registration to {action_verb} ---")
+        reg_map = {} # Map 1-based index to registration object
+        for i, reg in enumerate(registrations):
+            officer = user_repo.find_user_by_nric(reg.officer_nric)
+            officer_name = officer.name if officer else "Unknown Officer"
+            print(f"{i + 1}. ", end="")
+            self.display_registration_summary(reg, officer_name) # Use summary
+            reg_map[i + 1] = reg
+        print(" 0. Cancel")
+        print("------------------------------------")
+
+        while True:
+            choice = InputUtil.get_valid_integer_input("Enter the number of the registration (or 0 to cancel)", min_val=0, max_val=len(registrations))
+            if choice == 0: return None
+            selected_reg = reg_map.get(choice)
+            if selected_reg: return selected_reg
+            self.display_message("Invalid selection.", error=True)
+
+    def prompt_applicant_nric(self, purpose: str = "action") -> Optional[str]:
+         """Prompts for an applicant's NRIC for a specific purpose."""
+         while True:
+             try:
+                 nric = self.get_input(f"Enter Applicant's NRIC for {purpose} (or type 'cancel')")
+                 if nric.lower() == 'cancel': return None
+                 if InputUtil.validate_nric(nric):
+                     return nric
+                 else:
+                     self.display_message("Invalid NRIC format. Please try again.", error=True)
+             except KeyboardInterrupt:
+                  self.display_message("\nInput cancelled.")
+                  return None
+
+    def display_receipt(self, receipt_data: Dict[str, Any]):
+        """Displays the booking receipt details."""
+        self.display_dict("Booking Receipt", receipt_data)
+----
+# File name: view\project_view.py
+from typing import List, Optional, Dict, Any
+from .base_view import BaseView
+from model.project import Project
+from common.enums import UserRole, FlatType
+from utils.input_util import InputUtil
+from utils.date_util import DateUtil
+
+class ProjectView(BaseView):
+    """View specific to displaying project information."""
+
+    def display_project_summary(self, project: Project):
+         """Displays a brief summary of a project for lists."""
+         # Use the model's display method
+         print(project.get_display_summary())
+
+    def display_project_details(self, project: Project, requesting_user_role: UserRole, applicant_marital_status: Optional[str] = None):
+        """Displays detailed information about a project, tailored by role."""
+        details = {
+            "Neighborhood": project.neighborhood,
+            "Managed by NRIC": project.manager_nric,
+            "Application Period": f"{DateUtil.format_date(project.opening_date)} to {DateUtil.format_date(project.closing_date)}",
+            "Visibility": "ON" if project.visibility else "OFF",
+            "Status": "Active & Visible" if project.is_currently_visible_and_active() else \
+                      ("Visible but Inactive/Closed" if project.visibility else "Hidden")
+        }
+
+        units2, price2 = project.get_flat_details(FlatType.TWO_ROOM)
+        units3, price3 = project.get_flat_details(FlatType.THREE_ROOM)
+        details[f"{FlatType.TWO_ROOM.to_string()} Flats"] = f"{units2} units @ ${price2}"
+
+        show_3_room = requesting_user_role in [UserRole.HDB_OFFICER, UserRole.HDB_MANAGER] or \
+                      (requesting_user_role == UserRole.APPLICANT and applicant_marital_status == "Married")
+
+        if show_3_room:
+            details[f"{FlatType.THREE_ROOM.to_string()} Flats"] = f"{units3} units @ ${price3}"
+        else:
+             details[f"{FlatType.THREE_ROOM.to_string()} Flats"] = "(Not applicable/visible for single applicants)"
+
+        if requesting_user_role in [UserRole.HDB_OFFICER, UserRole.HDB_MANAGER]:
+            assigned = len(project.officer_nrics)
+            details["Officer Slots"] = f"{assigned} / {project.officer_slot} (Available: {project.get_available_officer_slots()})"
+            details["Assigned Officers (NRIC)"] = ", ".join(project.officer_nrics) if project.officer_nrics else "None"
+
+        self.display_dict(f"Project Details: {project.project_name}", details)
+
+    def prompt_project_filters(self, current_filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Prompts user for project filters."""
+        self.display_message(f"Current Filters: {current_filters or 'None'}", info=True)
+        location = self.get_input("Filter by Neighborhood (leave blank to keep/remove)")
+        flat_type = self.get_input("Filter by Flat Type (2 or 3, leave blank to keep/remove)")
+
+        new_filters = current_filters.copy()
+
+        if location is not None:
+            if location: new_filters['location'] = location
+            elif 'location' in new_filters: del new_filters['location']
+
+        if flat_type is not None:
+            if flat_type in ['2', '3']: new_filters['flat_type_str'] = flat_type
+            elif flat_type == '' and 'flat_type_str' in new_filters: del new_filters['flat_type_str']
+            elif flat_type != '': self.display_message("Invalid flat type filter. Keeping previous.", warning=True)
+
+        return new_filters
+
+    def select_project(self, projects: List[Project], action_verb: str = "view details for") -> Optional[Project]:
+        """Displays a list of projects and prompts for selection."""
+        if not projects:
+            self.display_message("No projects available for selection.", info=True)
+            return None
+
+        print(f"\n--- Select Project to {action_verb} ---")
+        project_map = {} # Map 1-based index to project object
+        for i, p in enumerate(projects):
+            print(f"{i + 1}. ", end="")
+            self.display_project_summary(p) # Use summary for selection list
+            project_map[i + 1] = p
+        print(" 0. Cancel")
+        print("-------------------------------------")
+
+        while True:
+            # Use InputUtil for validated selection
+            choice = InputUtil.get_valid_integer_input("Enter the number of the project (or 0 to cancel)", min_val=0, max_val=len(projects))
+            if choice == 0: return None
+            selected_project = project_map.get(choice)
+            if selected_project: return selected_project
+            # This else should not be reachable due to InputUtil validation range
+            self.display_message("Invalid selection.", error=True)
+
+    def prompt_create_project_details(self) -> Optional[Dict[str, Any]]:
+        """Prompts for details needed to create a new project."""
+        self.display_message("\n--- Create New Project ---", info=True)
+        details = {}
+        try:
+            details['name'] = InputUtil.get_non_empty_input("Enter Project Name")
+            details['neighborhood'] = InputUtil.get_non_empty_input("Enter Neighborhood")
+            details['n1'] = InputUtil.get_valid_integer_input("Enter Number of 2-Room units", min_val=0)
+            details['p1'] = InputUtil.get_valid_integer_input("Enter Selling Price for 2-Room", min_val=0)
+            details['n2'] = InputUtil.get_valid_integer_input("Enter Number of 3-Room units", min_val=0)
+            details['p2'] = InputUtil.get_valid_integer_input("Enter Selling Price for 3-Room", min_val=0)
+            details['od'] = InputUtil.get_valid_date_input("Enter Application Opening Date")
+            details['cd'] = InputUtil.get_valid_date_input("Enter Application Closing Date")
+            if details['cd'] < details['od']:
+                 self.display_message("Closing date cannot be before opening date.", error=True)
+                 return None
+            details['slot'] = InputUtil.get_valid_integer_input("Enter Max Officer Slots", min_val=0, max_val=10)
+            return details
+        except KeyboardInterrupt:
+             self.display_message("\nProject creation cancelled.")
+             return None
+
+    def prompt_edit_project_details(self, project: Project) -> Optional[Dict[str, Any]]:
+        """Prompts for details to edit, showing current values. Returns dict of *changed* values."""
+        self.display_message(f"\n--- Editing Project: {project.project_name} ---", info=True)
+        print("(Leave input blank to keep the current value)")
+        updates = {}
+        try:
+            # Get potential new values, default to original if blank
+            updates['project_name'] = self.get_input(f"New Project Name [{project.project_name}]") or project.project_name
+            updates['neighborhood'] = self.get_input(f"New Neighborhood [{project.neighborhood}]") or project.neighborhood
+
+            n1_str = self.get_input(f"New Number of 2-Room units [{project.get_flat_details(FlatType.TWO_ROOM)[0]}]")
+            updates['num_units1'] = int(n1_str) if n1_str.isdigit() else project.get_flat_details(FlatType.TWO_ROOM)[0]
+
+            p1_str = self.get_input(f"New Selling Price for 2-Room [{project.get_flat_details(FlatType.TWO_ROOM)[1]}]")
+            updates['price1'] = int(p1_str) if p1_str.isdigit() else project.get_flat_details(FlatType.TWO_ROOM)[1]
+
+            n2_str = self.get_input(f"New Number of 3-Room units [{project.get_flat_details(FlatType.THREE_ROOM)[0]}]")
+            updates['num_units2'] = int(n2_str) if n2_str.isdigit() else project.get_flat_details(FlatType.THREE_ROOM)[0]
+
+            p2_str = self.get_input(f"New Selling Price for 3-Room [{project.get_flat_details(FlatType.THREE_ROOM)[1]}]")
+            updates['price2'] = int(p2_str) if p2_str.isdigit() else project.get_flat_details(FlatType.THREE_ROOM)[1]
+
+            slot_str = self.get_input(f"New Max Officer Slots [{project.officer_slot}]")
+            updates['officer_slot'] = int(slot_str) if slot_str.isdigit() else project.officer_slot
+
+            od_str = self.get_input(f"New Opening Date ({DateUtil.DATE_FORMAT}) [{DateUtil.format_date(project.opening_date)}]")
+            updates['opening_date'] = DateUtil.parse_date(od_str) if od_str else project.opening_date
+
+            cd_str = self.get_input(f"New Closing Date ({DateUtil.DATE_FORMAT}) [{DateUtil.format_date(project.closing_date)}]")
+            updates['closing_date'] = DateUtil.parse_date(cd_str) if cd_str else project.closing_date
+
+            if updates['closing_date'] < updates['opening_date']:
+                 self.display_message("Closing date cannot be before opening date.", error=True)
+                 return None
+
+            # Compare with original to find actual changes
+            changed_updates = {}
+            if updates['project_name'] != project.project_name: changed_updates['project_name'] = updates['project_name']
+            if updates['neighborhood'] != project.neighborhood: changed_updates['neighborhood'] = updates['neighborhood']
+            if updates['num_units1'] != project.get_flat_details(FlatType.TWO_ROOM)[0]: changed_updates['num_units1'] = updates['num_units1']
+            if updates['price1'] != project.get_flat_details(FlatType.TWO_ROOM)[1]: changed_updates['price1'] = updates['price1']
+            if updates['num_units2'] != project.get_flat_details(FlatType.THREE_ROOM)[0]: changed_updates['num_units2'] = updates['num_units2']
+            if updates['price2'] != project.get_flat_details(FlatType.THREE_ROOM)[1]: changed_updates['price2'] = updates['price2']
+            if updates['officer_slot'] != project.officer_slot: changed_updates['officer_slot'] = updates['officer_slot']
+            if updates['opening_date'] != project.opening_date: changed_updates['opening_date'] = updates['opening_date']
+            if updates['closing_date'] != project.closing_date: changed_updates['closing_date'] = updates['closing_date']
+
+            return changed_updates # Return dict of changes, empty if none
+
+        except KeyboardInterrupt:
+             self.display_message("\nProject editing cancelled.")
+             return None
+        except ValueError:
+             self.display_message("Invalid numeric input provided.", error=True)
+             return None
+----
+# File name: view\report_view.py
+from typing import List, Dict, Any
+from .base_view import BaseView
+from utils.input_util import InputUtil # For filter prompts
+
+class ReportView(BaseView):
+    """View specific to displaying reports."""
+
+    def display_report(self, title: str, report_data: List[Dict[str, Any]], headers: List[str]):
+        """Displays report data in a formatted table."""
+        print(f"\n--- {title} ---")
+        if not report_data:
+            print("No data found for this report.")
+            print("-" * (len(title) + 6))
+            return
+
+        # Calculate column widths dynamically
+        widths = {header: len(header) for header in headers}
+        for row in report_data:
+            for header in headers:
+                value_str = str(row.get(header, '')) # Ensure value exists and is string
+                widths[header] = max(widths[header], len(value_str))
+
+        # Print header row
+        header_line = " | ".join(f"{header:<{widths[header]}}" for header in headers)
+        print(header_line)
+        print("-" * len(header_line))
+
+        # Print data rows
+        for row in report_data:
+            row_line = " | ".join(f"{str(row.get(header, '')):<{widths[header]}}" for header in headers)
+            print(row_line)
+
+        # Print footer
+        print("-" * len(header_line))
+        print(f"Total Records: {len(report_data)}")
+        print("-" * (len(title) + 6))
+
+    def prompt_report_filters(self) -> Dict[str, str]:
+        """Prompts for filters specific to the booking report."""
+        self.display_message("\n--- Generate Booking Report Filters ---", info=True)
+        print("(Leave blank for no filter on that field)")
+        filters = {}
+        try:
+            # Get raw input
+            marital_raw = self.get_input("Filter by Marital Status (Single/Married)")
+            project_raw = self.get_input("Filter by Project Name")
+            flat_type_raw = self.get_input("Filter by Flat Type (2/3)")
+
+            # Clean and validate input before returning
+            marital = marital_raw.strip().lower()
+            if marital in ['single', 'married']:
+                filters['filter_marital'] = marital.capitalize()
+            elif marital:
+                self.display_message("Invalid marital status filter. Ignoring.", warning=True)
+
+            project_name = project_raw.strip()
+            if project_name:
+                filters['filter_project_name'] = project_name
+
+            flat_type = flat_type_raw.strip()
+            if flat_type in ['2', '3']:
+                filters['filter_flat_type_str'] = flat_type
+            elif flat_type:
+                self.display_message("Invalid flat type filter. Ignoring.", warning=True)
+
+            return filters
+        except KeyboardInterrupt:
+             self.display_message("\nFilter input cancelled.")
+             return {} # Return empty filters
+----
+# File name: view\__init__.py
 
 ----

@@ -5,8 +5,8 @@ import glob
 #  File content
 # ----
 s = ''
-for filename in glob.glob('*.py') + glob.glob('*/**/*.py'):
-    if filename == "__init__.py":
+for filename in glob.glob('*.py') + glob.glob('*/**/*.py') + glob.glob('**/*.py'):
+    if filename == "__init__.py" or filename == "sum.py":
         continue
     s += f'# File name: {filename}\n'
     
