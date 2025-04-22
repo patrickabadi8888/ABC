@@ -1295,7 +1295,11 @@ class DataService {
         if (!Files.exists(path)) {
             System.err.println("Warning: File not found - " + filename + ". Attempting to create.");
             try {
-                Files.createDirectories(path.getParent()); // Ensure directory exists
+                Path parent = path.getParent();
+if (parent != null) {
+    Files.createDirectories(parent);
+}
+ // Ensure directory exists
                 Files.createFile(path);
                 // Write header to new file based on filename
                 String[] header = getHeaderForFile(filename);
@@ -1354,7 +1358,11 @@ class DataService {
         Path path = Paths.get(filename);
         try {
              // Ensure directory exists before writing
-             Files.createDirectories(path.getParent());
+             Path parent = path.getParent();
+if (parent != null) {
+    Files.createDirectories(parent);
+}
+
              try (BufferedWriter bw = Files.newBufferedWriter(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 for (String[] row : data) {
                     String line = Arrays.stream(row)
