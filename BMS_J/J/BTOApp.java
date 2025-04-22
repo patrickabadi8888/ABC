@@ -60,6 +60,7 @@ enum FlatType {
 
 enum ApplicationStatus {
     PENDING, SUCCESSFUL, UNSUCCESSFUL, BOOKED, WITHDRAWN
+    // PENDING_WITHDRAWAL // Add if manager approval for withdrawal is needed
 }
 
 enum OfficerRegistrationStatus {
@@ -168,12 +169,10 @@ class Applicant extends User {
     public void setBookedFlatType(FlatType bookedFlatType) { this.bookedFlatType = bookedFlatType; }
 
     // Convenience methods to check state
-    public boolean hasApplied() {
-        // An applicant has "applied" if they have a project name and a non-null, non-final status
-        return this.appliedProjectName != null &&
-               this.applicationStatus != null &&
-               this.applicationStatus != ApplicationStatus.WITHDRAWN && // Withdrawn means no active application
-               this.applicationStatus != ApplicationStatus.UNSUCCESSFUL; // Unsuccessful means no active application
+    public boolean hasActiveApplication() {
+        // An applicant has an "active" application if status is PENDING or SUCCESSFUL
+        return this.applicationStatus == ApplicationStatus.PENDING ||
+               this.applicationStatus == ApplicationStatus.SUCCESSFUL;
     }
 
     public boolean hasBooked() {
@@ -190,20 +189,20 @@ class Applicant extends User {
 
 // HDBOfficer IS-A Applicant (can do everything an Applicant can) + Officer duties
 class HDBOfficer extends Applicant {
-    private String handlingProjectName; // Project they are registered to handle (if approved)
     // Officer registration details are stored separately in OfficerRegistration objects
+    // The concept of "handlingProjectName" is derived from APPROVED registrations during sync/runtime checks
+    // We don't store it directly on the officer object to avoid sync issues.
 
     public HDBOfficer(String nric, String password, String name, int age, MaritalStatus maritalStatus) {
         super(nric, password, name, age, maritalStatus);
-        this.handlingProjectName = null; // Initially not handling any project
     }
 
     @Override
     public UserRole getRole() { return UserRole.HDB_OFFICER; }
 
-    // Getters and Setters specific to Officer state
-    public String getHandlingProjectName() { return handlingProjectName; }
-    public void setHandlingProjectName(String handlingProjectName) { this.handlingProjectName = handlingProjectName; }
+    // Method to get the project currently being handled (based on APPROVED registrations)
+    // This requires access to the registrations map, so it's better placed in the Controller or DataService sync logic.
+    // public String getHandlingProjectName(Map<String, OfficerRegistration> registrations) { ... }
 }
 
 // HDBManager IS-A User, but CANNOT be an Applicant
@@ -229,7 +228,7 @@ class FlatTypeDetails {
 
     public FlatTypeDetails(int totalUnits, int availableUnits, double sellingPrice) {
         if (totalUnits < 0 || availableUnits < 0 || availableUnits > totalUnits || sellingPrice < 0) {
-            throw new IllegalArgumentException("Invalid FlatTypeDetails parameters");
+            throw new IllegalArgumentException("Invalid FlatTypeDetails parameters: total=" + totalUnits + ", available=" + availableUnits + ", price=" + sellingPrice);
         }
         this.totalUnits = totalUnits;
         this.availableUnits = availableUnits;
@@ -277,7 +276,7 @@ class FlatTypeDetails {
             this.availableUnits = availableUnits;
         } else {
             // Log error but don't throw exception during loading if possible
-            System.err.println("Error: Invalid available units (" + availableUnits + ") set. Clamping to valid range [0, " + this.totalUnits + "].");
+            System.err.println("Error: Invalid available units (" + availableUnits + ") set for flat type with total " + this.totalUnits + ". Clamping to valid range [0, " + this.totalUnits + "].");
             this.availableUnits = Math.max(0, Math.min(availableUnits, this.totalUnits));
         }
     }
@@ -302,6 +301,9 @@ class Project {
             flatTypes == null || applicationOpeningDate == null || applicationClosingDate == null ||
             managerNric == null || maxOfficerSlots < 0) {
             throw new IllegalArgumentException("Invalid project parameters");
+        }
+        if (applicationClosingDate.before(applicationOpeningDate)) {
+             throw new IllegalArgumentException("Project closing date cannot be before opening date.");
         }
         this.projectName = projectName;
         this.neighborhood = neighborhood;
@@ -365,7 +367,7 @@ class Project {
         if (maxOfficerSlots >= this.approvedOfficerNrics.size() && maxOfficerSlots >= 0) {
             this.maxOfficerSlots = maxOfficerSlots;
         } else {
-             System.err.println("Warning: Cannot set max officer slots below current approved count (" + this.approvedOfficerNrics.size() + "). Value not changed.");
+             System.err.println("Warning: Cannot set max officer slots ("+ maxOfficerSlots +") below current approved count (" + this.approvedOfficerNrics.size() + "). Value not changed.");
         }
     }
     public void setVisibility(boolean visibility) { this.visibility = visibility; }
@@ -389,8 +391,22 @@ class Project {
     public boolean isApplicationPeriodActive(Date currentDate) {
         if (currentDate == null || applicationOpeningDate == null || applicationClosingDate == null) return false;
         // Use !before and !after for inclusive range check
-        return !currentDate.before(applicationOpeningDate) && !currentDate.after(applicationClosingDate);
+        // Adjust closing date check to be inclusive of the closing day
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(applicationClosingDate);
+        cal.add(Calendar.DATE, 1); // Move to the day AFTER closing date
+        Date endOfDayClosing = cal.getTime();
+
+        return !currentDate.before(applicationOpeningDate) && currentDate.before(endOfDayClosing);
     }
+
+    // Helper to check if application period has passed
+    public boolean isApplicationPeriodExpired(Date currentDate) {
+         if (currentDate == null || applicationClosingDate == null) return false; // Cannot determine if null
+         // Expired if current date is strictly after the closing date
+         return currentDate.after(applicationClosingDate);
+    }
+
 
     // Helper to get details for a specific flat type (returns null if not found)
     public FlatTypeDetails getFlatTypeDetails(FlatType type) {
@@ -689,13 +705,14 @@ class OfficerRegistration {
 // ==================
 class DataService {
     // File paths
-    private static final String APPLICANT_LIST_FILE = "ApplicantList.csv";
-    private static final String OFFICER_LIST_FILE = "OfficerList.csv";
-    private static final String MANAGER_LIST_FILE = "ManagerList.csv";
-    private static final String PROJECT_FILE = "ProjectList.csv";
-    private static final String APPLICATION_FILE = "applications.csv";
-    private static final String ENQUIRY_FILE = "enquiries.csv";
-    private static final String OFFICER_REGISTRATION_FILE = "officer_registrations.csv";
+    private static final String DATA_DIR = "data"; // Store CSVs in a subdirectory
+    private static final String APPLICANT_LIST_FILE = DATA_DIR + File.separator + "ApplicantList.csv";
+    private static final String OFFICER_LIST_FILE = DATA_DIR + File.separator + "OfficerList.csv";
+    private static final String MANAGER_LIST_FILE = DATA_DIR + File.separator + "ManagerList.csv";
+    private static final String PROJECT_FILE = DATA_DIR + File.separator + "ProjectList.csv";
+    private static final String APPLICATION_FILE = DATA_DIR + File.separator + "applications.csv";
+    private static final String ENQUIRY_FILE = DATA_DIR + File.separator + "enquiries.csv";
+    private static final String OFFICER_REGISTRATION_FILE = DATA_DIR + File.separator + "officer_registrations.csv";
 
     // CSV constants
     private static final String DELIMITER = ",";
@@ -727,7 +744,8 @@ class DataService {
             try {
                 String nric = data[1].trim();
                 if (!isValidNric(nric) || users.containsKey(nric)) {
-                    if(users.containsKey(nric)) System.err.println("Duplicate NRIC found in ApplicantList: " + nric);
+                    if(users.containsKey(nric)) System.err.println("Duplicate NRIC found in ApplicantList: " + nric + ". Skipping duplicate.");
+                    else System.err.println("Invalid NRIC format in ApplicantList: " + nric + ". Skipping.");
                     return; // Skip invalid or duplicate NRIC
                 }
                 int age = Integer.parseInt(data[2].trim());
@@ -743,7 +761,10 @@ class DataService {
         readCsv(OFFICER_LIST_FILE, OFFICER_HEADER.length).forEach(data -> {
             try {
                 String nric = data[1].trim();
-                 if (!isValidNric(nric)) return;
+                 if (!isValidNric(nric)) {
+                     System.err.println("Invalid NRIC format in OfficerList: " + nric + ". Skipping.");
+                     return;
+                 }
                 int age = Integer.parseInt(data[2].trim());
                 MaritalStatus status = MaritalStatus.valueOf(data[3].trim().toUpperCase());
                 HDBOfficer officer = new HDBOfficer(nric, data[4].trim(), data[0].trim(), age, status);
@@ -751,7 +772,7 @@ class DataService {
                 if (users.containsKey(nric) && !(users.get(nric) instanceof HDBOfficer)) {
                      System.out.println("Info: User " + nric + " found in both Applicant and Officer lists. Using Officer role.");
                 } else if (users.containsKey(nric)) {
-                     System.err.println("Duplicate NRIC found in OfficerList: " + nric);
+                     System.err.println("Duplicate NRIC found in OfficerList: " + nric + ". Skipping duplicate.");
                      return; // Skip duplicate within officer list
                 }
                 users.put(nric, officer);
@@ -764,7 +785,10 @@ class DataService {
         readCsv(MANAGER_LIST_FILE, MANAGER_HEADER.length).forEach(data -> {
             try {
                 String nric = data[1].trim();
-                 if (!isValidNric(nric)) return;
+                 if (!isValidNric(nric)) {
+                     System.err.println("Invalid NRIC format in ManagerList: " + nric + ". Skipping.");
+                     return;
+                 }
                 int age = Integer.parseInt(data[2].trim());
                 MaritalStatus status = MaritalStatus.valueOf(data[3].trim().toUpperCase());
                 HDBManager manager = new HDBManager(nric, data[4].trim(), data[0].trim(), age, status);
@@ -772,7 +796,7 @@ class DataService {
                 if (users.containsKey(nric) && !(users.get(nric) instanceof HDBManager)) {
                      System.out.println("Info: User " + nric + " found in other lists. Using Manager role.");
                 } else if (users.containsKey(nric)) {
-                     System.err.println("Duplicate NRIC found in ManagerList: " + nric);
+                     System.err.println("Duplicate NRIC found in ManagerList: " + nric + ". Skipping duplicate.");
                      return; // Skip duplicate within manager list
                 }
                 users.put(nric, manager);
@@ -854,20 +878,26 @@ class DataService {
                 }
                  // Validate dates
                  if (openingDate == null || closingDate == null || closingDate.before(openingDate)) {
-                     System.err.println("Warning: Project '" + projectName + "' has invalid application dates. Skipping project.");
+                     System.err.println("Warning: Project '" + projectName + "' has invalid application dates (Open: " + data[8] + ", Close: " + data[9] + "). Skipping project.");
                      projectNames.remove(projectName.toLowerCase());
                      return;
                  }
-                 // Validate officer NRICs? Optional, could check if they exist and are officers.
-                 List<String> validOfficers = officers.stream()
-                     .filter(nric -> users.containsKey(nric) && users.get(nric) instanceof HDBOfficer)
-                     .collect(Collectors.toList());
-                 if (validOfficers.size() != officers.size()) {
-                     System.err.println("Warning: Project '" + projectName + "' contains invalid or non-officer NRICs in its officer list. Only valid officers retained.");
+                 // Validate officer NRICs exist and are officers.
+                 List<String> validOfficers = new ArrayList<>();
+                 List<String> invalidOfficers = new ArrayList<>();
+                 for (String nric : officers) {
+                     if (users.containsKey(nric) && users.get(nric) instanceof HDBOfficer) {
+                         validOfficers.add(nric);
+                     } else {
+                         invalidOfficers.add(nric);
+                     }
+                 }
+                 if (!invalidOfficers.isEmpty()) {
+                     System.err.println("Warning: Project '" + projectName + "' contains invalid or non-officer NRICs in its officer list: " + invalidOfficers + ". Only valid officers retained.");
                  }
                  if (validOfficers.size() > officerSlots) {
-                      System.err.println("Warning: Project '" + projectName + "' has more approved officers ("+validOfficers.size()+") than slots ("+officerSlots+"). Check data.");
-                      // Truncate or just warn? Let's warn for now.
+                      System.err.println("Warning: Project '" + projectName + "' has more approved officers ("+validOfficers.size()+") than slots ("+officerSlots+"). Check data. Using officer list as is.");
+                      // Allow loading even if inconsistent, sync step will handle registrations.
                  }
 
 
@@ -951,6 +981,9 @@ class DataService {
                          // System.out.println("Adjusting available units for " + project.getProjectName() + "/" + type.getDisplayName() + " from " + details.getAvailableUnits() + " to " + finalAvailable);
                          details.setAvailableUnits(finalAvailable);
                     }
+                     if (count > details.getTotalUnits()) {
+                         System.err.println("Error: More flats booked (" + count + ") than total units (" + details.getTotalUnits() + ") for " + project.getProjectName() + "/" + type.getDisplayName() + ". Available units set to 0.");
+                     }
                 } else {
                      System.err.println("Warning: Trying to adjust units for non-existent flat type " + type.getDisplayName() + " in project " + project.getProjectName());
                 }
@@ -1058,6 +1091,7 @@ class DataService {
     // Call this after loading all data to ensure consistency
     public static void synchronizeData(Map<String, User> users, List<Project> projects, Map<String, BTOApplication> applications, Map<String, OfficerRegistration> officerRegistrations) {
         System.out.println("Synchronizing loaded data...");
+        boolean registrationsModified = false; // Flag to check if we need to save registrations
 
         // 1. Sync Applicant state with Applications
         users.values().stream()
@@ -1094,42 +1128,67 @@ class DataService {
                  }
              });
 
-        // 2. Sync Officer handling project state
-        // Clear existing handling projects first
-         users.values().stream()
-              .filter(u -> u instanceof HDBOfficer)
-              .forEach(u -> ((HDBOfficer)u).setHandlingProjectName(null));
-        // Set handling project based on APPROVED registrations AND project's approved list
-        projects.forEach(project -> {
-            project.getApprovedOfficerNrics().forEach(officerNric -> {
-                 User user = users.get(officerNric);
-                 if (user instanceof HDBOfficer) {
-                     // Check if there's a corresponding APPROVED registration (consistency check)
-                     boolean hasApprovedReg = officerRegistrations.values().stream()
-                         .anyMatch(reg -> reg.getOfficerNric().equals(officerNric) &&
-                                          reg.getProjectName().equals(project.getProjectName()) &&
-                                          reg.getStatus() == OfficerRegistrationStatus.APPROVED);
-                     if (hasApprovedReg) {
-                         // Check for conflicts (already handling another project?) - Logic should prevent this during approval
-                         HDBOfficer officer = (HDBOfficer) user;
-                         if (officer.getHandlingProjectName() == null) {
-                            officer.setHandlingProjectName(project.getProjectName());
-                         } else {
-                             System.err.println("Data Sync Error: Officer " + officerNric + " is approved for multiple projects (" + officer.getHandlingProjectName() + ", " + project.getProjectName() + "). Check data/logic.");
-                             // Handle conflict: maybe remove from the second project? Or just log.
-                         }
-                     } else {
-                          System.err.println("Data Sync Warning: Officer " + officerNric + " is in project '" + project.getProjectName() + "' approved list, but no corresponding APPROVED registration found.");
-                          // Should we remove the officer from the project list here?
-                          // project.removeApprovedOfficer(officerNric); // Risky, might hide data issues
-                     }
-                 } else {
-                      System.err.println("Data Sync Warning: NRIC " + officerNric + " in project '" + project.getProjectName() + "' approved list is not a valid HDB Officer.");
-                 }
-            });
-        });
+        // 2. Sync Officer Registrations with Project Approved Lists
+        // Iterate through projects and their approved officer lists
+        for (Project project : projects) {
+            List<String> approvedNrics = new ArrayList<>(project.getApprovedOfficerNrics()); // Copy to avoid concurrent modification issues if we remove invalid ones
 
-        // 3. Available unit counts are already adjusted during application loading.
+            for (String officerNric : approvedNrics) {
+                User user = users.get(officerNric);
+                if (!(user instanceof HDBOfficer)) {
+                    System.err.println("Data Sync Warning: NRIC " + officerNric + " in project '" + project.getProjectName() + "' approved list is not a valid HDB Officer. Consider removing from project CSV.");
+                    // Optionally remove from the project object's list here?
+                    // project.removeApprovedOfficer(officerNric); // Be careful with modifying project data here
+                    continue;
+                }
+
+                // Check if a corresponding APPROVED registration exists
+                String expectedRegId = officerNric + "_REG_" + project.getProjectName();
+                OfficerRegistration existingReg = officerRegistrations.get(expectedRegId);
+
+                if (existingReg == null || existingReg.getStatus() != OfficerRegistrationStatus.APPROVED) {
+                    // Missing or incorrect status registration found for an officer in the project's approved list.
+                    System.out.println("Info: Auto-creating/updating APPROVED registration for Officer " + officerNric + " for Project '" + project.getProjectName() + "' based on project list.");
+
+                    // Use project opening date as a placeholder registration date
+                    Date placeholderDate = project.getApplicationOpeningDate() != null ? project.getApplicationOpeningDate() : new Date(0); // Use epoch if project date is null
+
+                    OfficerRegistration syncReg = new OfficerRegistration(expectedRegId, officerNric, project.getProjectName(), OfficerRegistrationStatus.APPROVED, placeholderDate);
+                    officerRegistrations.put(syncReg.getRegistrationId(), syncReg);
+                    registrationsModified = true; // Mark for saving
+                }
+                // No need to set handlingProjectName on officer object, it's derived at runtime
+            }
+        }
+
+        // 3. Check for APPROVED registrations where the officer is NOT in the project list (less common issue)
+        for (OfficerRegistration reg : officerRegistrations.values()) {
+            if (reg.getStatus() == OfficerRegistrationStatus.APPROVED) {
+                Project project = projects.stream()
+                                        .filter(p -> p.getProjectName().equals(reg.getProjectName()))
+                                        .findFirst().orElse(null);
+                if (project == null) {
+                    System.err.println("Data Sync Warning: Approved registration " + reg.getRegistrationId() + " refers to a non-existent project '" + reg.getProjectName() + "'. Consider removing registration.");
+                    // Optionally mark for removal: regsToRemoveOrUpdate.add(reg);
+                } else if (!project.getApprovedOfficerNrics().contains(reg.getOfficerNric())) {
+                    System.err.println("Data Sync Warning: Approved registration " + reg.getRegistrationId() + " exists, but officer " + reg.getOfficerNric() + " is NOT in project '" + project.getProjectName() + "' approved list. Registration status might be outdated or project list incorrect.");
+                    // What to do? Reject the registration? Add officer to project? Let's just warn.
+                    // Option: reg.setStatus(OfficerRegistrationStatus.REJECTED); registrationsModified = true;
+                }
+            }
+        }
+        // Process removals if decided:
+        // regsToRemoveOrUpdate.forEach(reg -> officerRegistrations.remove(reg.getRegistrationId()));
+        // if (!regsToRemoveOrUpdate.isEmpty()) registrationsModified = true;
+
+
+        // 4. Available unit counts are already adjusted during application loading.
+
+        // Save registrations if modified during sync
+        if (registrationsModified) {
+            System.out.println("Saving updated officer registrations due to synchronization...");
+            saveOfficerRegistrations(officerRegistrations);
+        }
 
         System.out.println("Data synchronization complete.");
     }
@@ -1218,7 +1277,7 @@ class DataService {
             data[11] = String.valueOf(project.getMaxOfficerSlots());
             // Join approved officers with semicolon, handle empty list
             String officers = String.join(LIST_DELIMITER, project.getApprovedOfficerNrics());
-            data[12] = officers; // No extra quotes needed if escapeCsvField handles it
+            data[12] = officers; // Let escapeCsvField handle quoting if needed
 
             // Visibility (Column 13, index 13) - Added
             data[13] = project.isVisible() ? "1" : "0";
@@ -1233,17 +1292,19 @@ class DataService {
     public static void saveApplications(Map<String, BTOApplication> applications) {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(APPLICATION_HEADER);
-        applications.values().forEach(app -> {
-            dataList.add(new String[]{
-                app.getApplicationId(),
-                app.getApplicantNric(),
-                app.getProjectName(),
-                // Save display name for flat type for consistency with project file? Or enum name? Let's use enum name.
-                app.getFlatTypeApplied() == null ? "" : app.getFlatTypeApplied().name(), // Save enum name or ""
-                app.getStatus().name(),
-                formatDate(app.getApplicationDate())
+        applications.values().stream()
+            .sorted(Comparator.comparing(BTOApplication::getApplicationId)) // Sort for consistent output
+            .forEach(app -> {
+                dataList.add(new String[]{
+                    app.getApplicationId(),
+                    app.getApplicantNric(),
+                    app.getProjectName(),
+                    // Save enum name for flat type for robustness
+                    app.getFlatTypeApplied() == null ? "" : app.getFlatTypeApplied().name(), // Save enum name or ""
+                    app.getStatus().name(),
+                    formatDate(app.getApplicationDate())
+                });
             });
-        });
         writeCsv(APPLICATION_FILE, dataList);
         System.out.println("Saved applications.");
     }
@@ -1252,18 +1313,20 @@ class DataService {
     public static void saveEnquiries(List<Enquiry> enquiries) {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(ENQUIRY_HEADER);
-        enquiries.forEach(enq -> {
-            dataList.add(new String[]{
-                enq.getEnquiryId(),
-                enq.getApplicantNric(),
-                enq.getProjectName(),
-                enq.getEnquiryText(),
-                enq.getReplyText() == null ? "" : enq.getReplyText(),
-                enq.getRepliedByNric() == null ? "" : enq.getRepliedByNric(),
-                formatDate(enq.getEnquiryDate()),
-                formatDate(enq.getReplyDate()) // formatDate handles null -> ""
+        enquiries.stream()
+            .sorted(Comparator.comparing(Enquiry::getEnquiryId)) // Sort for consistent output
+            .forEach(enq -> {
+                dataList.add(new String[]{
+                    enq.getEnquiryId(),
+                    enq.getApplicantNric(),
+                    enq.getProjectName(),
+                    enq.getEnquiryText(),
+                    enq.getReplyText() == null ? "" : enq.getReplyText(),
+                    enq.getRepliedByNric() == null ? "" : enq.getRepliedByNric(),
+                    formatDate(enq.getEnquiryDate()),
+                    formatDate(enq.getReplyDate()) // formatDate handles null -> ""
+                });
             });
-        });
         writeCsv(ENQUIRY_FILE, dataList);
         System.out.println("Saved enquiries.");
     }
@@ -1272,15 +1335,17 @@ class DataService {
      public static void saveOfficerRegistrations(Map<String, OfficerRegistration> registrations) {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(OFFICER_REGISTRATION_HEADER);
-        registrations.values().forEach(reg -> {
-            dataList.add(new String[]{
-                reg.getRegistrationId(),
-                reg.getOfficerNric(),
-                reg.getProjectName(),
-                reg.getStatus().name(),
-                formatDate(reg.getRegistrationDate())
+        registrations.values().stream()
+            .sorted(Comparator.comparing(OfficerRegistration::getRegistrationId)) // Sort for consistent output
+            .forEach(reg -> {
+                dataList.add(new String[]{
+                    reg.getRegistrationId(),
+                    reg.getOfficerNric(),
+                    reg.getProjectName(),
+                    reg.getStatus().name(),
+                    formatDate(reg.getRegistrationDate())
+                });
             });
-        });
         writeCsv(OFFICER_REGISTRATION_FILE, dataList);
         System.out.println("Saved officer registrations.");
     }
@@ -1296,10 +1361,9 @@ class DataService {
             System.err.println("Warning: File not found - " + filename + ". Attempting to create.");
             try {
                 Path parent = path.getParent();
-if (parent != null) {
-    Files.createDirectories(parent);
-}
- // Ensure directory exists
+                if (parent != null) {
+                    Files.createDirectories(parent); // Ensure directory exists
+                }
                 Files.createFile(path);
                 // Write header to new file based on filename
                 String[] header = getHeaderForFile(filename);
@@ -1327,6 +1391,7 @@ if (parent != null) {
                 }
 
                 // Regex to split CSV, handling quoted fields with commas/quotes inside
+                // Ensure it handles empty fields correctly (e.g., ,,)
                 String[] values = line.split(DELIMITER + "(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
 
                 // Trim whitespace and remove surrounding quotes from each value
@@ -1339,7 +1404,14 @@ if (parent != null) {
                 }
 
                 // Check column count consistency (optional but helpful)
-                if (values.length != expectedColumns) {
+                // Allow flexibility if last column (e.g., visibility) might be missing in older files
+                if (values.length < expectedColumns && filename.equals(PROJECT_FILE) && values.length == expectedColumns -1) {
+                     // If it's the project file and only the visibility column is missing, pad it
+                     String[] paddedValues = Arrays.copyOf(values, expectedColumns);
+                     paddedValues[expectedColumns - 1] = "0"; // Default visibility to 0 (Off)
+                     values = paddedValues;
+                     System.out.println("Info: Line " + lineNumber + " in " + filename + " seems to be missing the 'Visibility' column. Assuming '0' (Off).");
+                } else if (values.length != expectedColumns) {
                      System.err.println("Warning: Malformed line " + lineNumber + " in " + filename + ". Expected " + expectedColumns + " columns, found " + values.length + ". Skipping line: " + line);
                      continue; // Skip lines with wrong number of columns
                 }
@@ -1359,9 +1431,9 @@ if (parent != null) {
         try {
              // Ensure directory exists before writing
              Path parent = path.getParent();
-if (parent != null) {
-    Files.createDirectories(parent);
-}
+             if (parent != null) {
+                 Files.createDirectories(parent);
+             }
 
              try (BufferedWriter bw = Files.newBufferedWriter(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 for (String[] row : data) {
@@ -1379,21 +1451,24 @@ if (parent != null) {
 
     // Helper to get the correct header array based on filename
     private static String[] getHeaderForFile(String filename) {
-        if (filename.equals(APPLICANT_LIST_FILE)) return APPLICANT_HEADER;
-        if (filename.equals(OFFICER_LIST_FILE)) return OFFICER_HEADER;
-        if (filename.equals(MANAGER_LIST_FILE)) return MANAGER_HEADER;
-        if (filename.equals(PROJECT_FILE)) return PROJECT_HEADER;
-        if (filename.equals(APPLICATION_FILE)) return APPLICATION_HEADER;
-        if (filename.equals(ENQUIRY_FILE)) return ENQUIRY_HEADER;
-        if (filename.equals(OFFICER_REGISTRATION_FILE)) return OFFICER_REGISTRATION_HEADER;
+        Path p = Paths.get(filename);
+        String baseName = p.getFileName().toString();
+
+        if (baseName.equals(Paths.get(APPLICANT_LIST_FILE).getFileName().toString())) return APPLICANT_HEADER;
+        if (baseName.equals(Paths.get(OFFICER_LIST_FILE).getFileName().toString())) return OFFICER_HEADER;
+        if (baseName.equals(Paths.get(MANAGER_LIST_FILE).getFileName().toString())) return MANAGER_HEADER;
+        if (baseName.equals(Paths.get(PROJECT_FILE).getFileName().toString())) return PROJECT_HEADER;
+        if (baseName.equals(Paths.get(APPLICATION_FILE).getFileName().toString())) return APPLICATION_HEADER;
+        if (baseName.equals(Paths.get(ENQUIRY_FILE).getFileName().toString())) return ENQUIRY_HEADER;
+        if (baseName.equals(Paths.get(OFFICER_REGISTRATION_FILE).getFileName().toString())) return OFFICER_REGISTRATION_HEADER;
         return null;
     }
 
-    // Escapes fields containing delimiters, quotes, or newlines for CSV compatibility
+    // Escapes fields containing delimiters, quotes, list delimiters, or newlines for CSV compatibility
     private static String escapeCsvField(String field) {
         if (field == null) return ""; // Represent null as empty string
-        // Quote the field if it contains delimiter, quote, or newline characters
-        if (field.contains(DELIMITER) || field.contains("\"") || field.contains("\n") || field.contains("\r")) {
+        // Quote the field if it contains delimiter, quote, list delimiter, or newline characters
+        if (field.contains(DELIMITER) || field.contains("\"") || field.contains(LIST_DELIMITER) || field.contains("\n") || field.contains("\r")) {
             // Escape internal quotes by doubling them and enclose the whole field in quotes
             return "\"" + field.replace("\"", "\"\"") + "\"";
         }
@@ -1429,9 +1504,9 @@ if (parent != null) {
             return new ArrayList<>();
         }
         String effectiveList = listString.trim();
-        // Remove surrounding quotes if present
+        // Remove surrounding quotes if present (handle escaped quotes inside)
         if (effectiveList.startsWith("\"") && effectiveList.endsWith("\"")) {
-            effectiveList = effectiveList.substring(1, effectiveList.length() - 1);
+            effectiveList = effectiveList.substring(1, effectiveList.length() - 1).replace("\"\"", "\"");
         }
         // Split by delimiter, trim results, remove empty strings
         return Arrays.stream(effectiveList.split(LIST_DELIMITER))
@@ -1557,6 +1632,30 @@ abstract class BaseController {
         return applications.get(appId);
     }
 
+    // Helper to get the project an officer is currently handling (if any)
+    protected Project getOfficerHandlingProject(HDBOfficer officer) {
+        if (officer == null) return null;
+        // Find the APPROVED registration for this officer
+        return officerRegistrations.values().stream()
+            .filter(reg -> reg.getOfficerNric().equals(officer.getNric()) && reg.getStatus() == OfficerRegistrationStatus.APPROVED)
+            .map(reg -> findProjectByName(reg.getProjectName())) // Find the corresponding project
+            .filter(Objects::nonNull) // Ensure project exists
+            .findFirst() // An officer should only handle one at a time due to overlap rules
+            .orElse(null);
+    }
+
+    // Helper to check if two projects' application periods overlap
+    protected boolean checkDateOverlap(Project p1, Project p2) {
+        if (p1 == null || p2 == null || p1.getApplicationOpeningDate() == null || p1.getApplicationClosingDate() == null || p2.getApplicationOpeningDate() == null || p2.getApplicationClosingDate() == null) {
+            return false; // Cannot determine overlap if dates are missing
+        }
+        // Overlap exists if p1 starts before p2 ends AND p1 ends after p2 starts
+        // Use !after and !before for inclusive start/end date checks
+        return !p1.getApplicationOpeningDate().after(p2.getApplicationClosingDate()) &&
+               !p1.getApplicationClosingDate().before(p2.getApplicationOpeningDate());
+    }
+
+
     // --- Project Filtering and Display Logic ---
 
     /**
@@ -1566,9 +1665,10 @@ abstract class BaseController {
      * @param checkEligibility If true, filter based on applicant's age/marital status for flat types.
      * @param checkAvailability If true, filter out projects where no eligible flats have units available.
      * @param checkApplicationPeriod If true, filter out projects whose application period is not active.
+     * @param checkNotExpired If true, filter out projects whose application period has passed.
      * @return Filtered list of projects.
      */
-     protected List<Project> getFilteredProjects(boolean checkVisibility, boolean checkEligibility, boolean checkAvailability, boolean checkApplicationPeriod) {
+     protected List<Project> getFilteredProjects(boolean checkVisibility, boolean checkEligibility, boolean checkAvailability, boolean checkApplicationPeriod, boolean checkNotExpired) {
         Date currentDate = DataService.getCurrentDate();
         return projects.stream()
                 // 1. Basic Filters (Location, Flat Type Preference)
@@ -1578,10 +1678,13 @@ abstract class BaseController {
                 // 2. Visibility Filter
                 .filter(p -> !checkVisibility || isProjectVisibleToCurrentUser(p))
 
-                // 3. Application Period Filter
+                // 3. Application Period Filter (Active)
                 .filter(p -> !checkApplicationPeriod || p.isApplicationPeriodActive(currentDate))
 
-                // 4. Eligibility & Availability Filter (more complex)
+                // 4. Application Period Filter (Not Expired)
+                .filter(p -> !checkNotExpired || !p.isApplicationPeriodExpired(currentDate))
+
+                // 5. Eligibility & Availability Filter (more complex)
                 .filter(p -> {
                     if (!checkEligibility && !checkAvailability) return true; // Skip if checks not needed
 
@@ -1616,17 +1719,29 @@ abstract class BaseController {
     protected boolean isProjectVisibleToCurrentUser(Project project) {
         if (currentUser instanceof HDBManager) return true; // Managers see all
 
-        // Check if user has applied to this specific project
-        boolean appliedToThis = (currentUser instanceof Applicant) &&
-                                project.getProjectName().equals(((Applicant)currentUser).getAppliedProjectName());
+        // Check if user has applied to this specific project (any non-final status)
+        boolean appliedToThis = false;
+        if (currentUser instanceof Applicant) {
+            Applicant appUser = (Applicant) currentUser;
+            appliedToThis = project.getProjectName().equals(appUser.getAppliedProjectName()) &&
+                            appUser.getApplicationStatus() != null &&
+                            appUser.getApplicationStatus() != ApplicationStatus.UNSUCCESSFUL &&
+                            appUser.getApplicationStatus() != ApplicationStatus.WITHDRAWN;
+        }
+
 
         // Check if user is an approved officer for this project
-        boolean isHandlingOfficer = (currentUser instanceof HDBOfficer) &&
-                                    project.getProjectName().equals(((HDBOfficer)currentUser).getHandlingProjectName());
+        boolean isHandlingOfficer = false;
+        if (currentUser instanceof HDBOfficer) {
+            isHandlingOfficer = officerRegistrations.values().stream()
+                .anyMatch(reg -> reg.getOfficerNric().equals(currentUser.getNric()) &&
+                                 reg.getProjectName().equals(project.getProjectName()) &&
+                                 reg.getStatus() == OfficerRegistrationStatus.APPROVED);
+        }
 
         // Project is visible if:
         // 1. Visibility toggle is ON OR
-        // 2. Visibility is OFF, BUT the user has applied OR is the handling officer
+        // 2. Visibility is OFF, BUT the user has an active application OR is the handling officer
         return project.isVisible() || appliedToThis || isHandlingOfficer;
     }
 
@@ -1820,8 +1935,8 @@ class ApplicantController extends BaseController {
     // View projects open for application that the user is eligible for
     public void viewOpenProjects() {
         System.out.println("\n--- Viewing Available BTO Projects ---");
-        // Filter: Visible, Eligible, Available Units, Active Application Period
-        List<Project> availableProjects = getFilteredProjects(true, true, true, true);
+        // Filter: Visible, Eligible, Available Units, Active Application Period, Not Expired
+        List<Project> availableProjects = getFilteredProjects(true, true, true, true, true);
         viewAndSelectProject(availableProjects, "Available BTO Projects");
         // No selection needed here, just viewing
     }
@@ -1834,7 +1949,7 @@ class ApplicantController extends BaseController {
              System.out.println("You have already booked a flat for project '" + applicant.getAppliedProjectName() + "'. You cannot apply again.");
              return;
          }
-        if (applicant.hasApplied()) { // Checks for PENDING or SUCCESSFUL status
+        if (applicant.hasActiveApplication()) { // Checks for PENDING or SUCCESSFUL status
             System.out.println("You have an active application for project '" + applicant.getAppliedProjectName() + "' with status: " + applicant.getApplicationStatus());
             System.out.println("You must withdraw or be unsuccessful before applying again.");
             return;
@@ -1842,8 +1957,8 @@ class ApplicantController extends BaseController {
 
         // 2. Find Eligible Projects Currently Open for Application
         System.out.println("\n--- Apply for BTO Project ---");
-        // Filter: Visible, Eligible, Available Units, Active Application Period
-        List<Project> eligibleProjects = getFilteredProjects(true, true, true, true);
+        // Filter: Visible, Eligible, Available Units, Active Application Period, Not Expired
+        List<Project> eligibleProjects = getFilteredProjects(true, true, true, true, true);
 
         if (eligibleProjects.isEmpty()) {
             System.out.println("There are currently no open projects you are eligible to apply for based on filters, eligibility, and unit availability.");
@@ -1858,21 +1973,22 @@ class ApplicantController extends BaseController {
         // 4. Officer Specific Checks (if current user is an officer)
          if (currentUser instanceof HDBOfficer) {
              HDBOfficer officer = (HDBOfficer) currentUser;
-             // Cannot apply for project they are handling
-             if (selectedProject.getProjectName().equals(officer.getHandlingProjectName())) {
-                 System.out.println("Error: You cannot apply for a project you are handling as an Officer.");
+             // Cannot apply for project they are handling (approved)
+             Project handlingProject = getOfficerHandlingProject(officer);
+             if (handlingProject != null && selectedProject.equals(handlingProject)) {
+                 System.out.println("Error: You cannot apply for a project you are currently handling as an Officer.");
                  return;
              }
-             // Cannot apply for project they have pending/approved registration for
-             boolean hasRelevantRegistration = officerRegistrations.values().stream()
+             // Cannot apply for project they have pending registration for
+             boolean hasPendingRegistration = officerRegistrations.values().stream()
                  .anyMatch(reg -> reg.getOfficerNric().equals(officer.getNric()) &&
                                 reg.getProjectName().equals(selectedProject.getProjectName()) &&
-                                (reg.getStatus() == OfficerRegistrationStatus.PENDING || reg.getStatus() == OfficerRegistrationStatus.APPROVED));
-             if (hasRelevantRegistration) {
-                  System.out.println("Error: You cannot apply for a project you have a pending or approved registration for.");
+                                reg.getStatus() == OfficerRegistrationStatus.PENDING);
+             if (hasPendingRegistration) {
+                  System.out.println("Error: You cannot apply for a project you have a pending registration for.");
                   return;
              }
-             // Cannot apply if they ever handled this project (check project's officer list?) - Less critical, covered by above checks mostly.
+             // Note: The check for *approved* registration is covered by the handlingProject check above.
          }
 
         // 5. Select Flat Type
@@ -1941,13 +2057,27 @@ class ApplicantController extends BaseController {
 
     public void viewMyApplication() {
         Applicant applicant = (Applicant) currentUser;
-        // Use the application map as the source of truth
-        BTOApplication application = findApplicationByApplicantAndProject(applicant.getNric(), applicant.getAppliedProjectName());
+        // Use the application map as the source of truth, find the most relevant one
+        BTOApplication application = applications.values().stream()
+             .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
+             .max(Comparator.comparing(BTOApplication::getStatus, Comparator.comparingInt(s -> {
+                 // Define order of relevance: BOOKED > SUCCESSFUL > PENDING > WITHDRAWN > UNSUCCESSFUL
+                 switch (s) {
+                     case BOOKED: return 5;
+                     case SUCCESSFUL: return 4;
+                     case PENDING: return 3;
+                     case WITHDRAWN: return 2;
+                     case UNSUCCESSFUL: return 1;
+                     default: return 0;
+                 }
+             })).thenComparing(BTOApplication::getApplicationDate).reversed()) // Newest first if status same
+             .orElse(null);
+
 
         if (application == null) {
             // Check if the applicant object thinks it has applied (sync issue?)
             if (applicant.getAppliedProjectName() != null || applicant.getApplicationStatus() != null) {
-                 System.out.println("Your profile indicates an application, but the record could not be found. Please contact support.");
+                 System.out.println("Your profile indicates an application, but the record could not be found or is outdated. Please contact support.");
                  // Optionally clear local state: applicant.clearApplicationState();
             } else {
                 System.out.println("You have not applied for any BTO project yet.");
@@ -1956,6 +2086,7 @@ class ApplicantController extends BaseController {
         }
 
         // Sync applicant object state just in case (should be done on load ideally)
+        applicant.setAppliedProjectName(application.getProjectName());
         applicant.setApplicationStatus(application.getStatus());
         applicant.setBookedFlatType(application.getStatus() == ApplicationStatus.BOOKED ? application.getFlatTypeApplied() : null);
 
@@ -1980,9 +2111,16 @@ class ApplicantController extends BaseController {
 
     public void requestWithdrawal() {
         Applicant applicant = (Applicant) currentUser;
-        BTOApplication application = findApplicationByApplicantAndProject(applicant.getNric(), applicant.getAppliedProjectName());
+        // Find the application that is currently active (PENDING or SUCCESSFUL) or BOOKED
+         BTOApplication application = applications.values().stream()
+             .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
+             .filter(app -> app.getStatus() == ApplicationStatus.PENDING ||
+                            app.getStatus() == ApplicationStatus.SUCCESSFUL ||
+                            app.getStatus() == ApplicationStatus.BOOKED)
+             .findFirst() // Should only be one such application
+             .orElse(null);
 
-        if (application == null || application.getStatus() == ApplicationStatus.WITHDRAWN || application.getStatus() == ApplicationStatus.UNSUCCESSFUL) {
+        if (application == null) {
             System.out.println("You do not have an active application (PENDING, SUCCESSFUL, or BOOKED) to withdraw.");
             return;
         }
@@ -2004,10 +2142,13 @@ class ApplicantController extends BaseController {
                  if (project != null && previouslyBookedType != null) {
                      FlatTypeDetails details = project.getMutableFlatTypeDetails(previouslyBookedType);
                      if (details != null) {
-                         details.incrementAvailableUnits(); // Put unit back
-                         System.out.println("Unit count for " + previouslyBookedType.getDisplayName() + " in project " + project.getProjectName() + " incremented.");
-                         // Save projects because unit count changed
-                         DataService.saveProjects(projects);
+                         if (details.incrementAvailableUnits()) { // Put unit back
+                            System.out.println("Unit count for " + previouslyBookedType.getDisplayName() + " in project " + project.getProjectName() + " incremented.");
+                            // Save projects because unit count changed
+                            DataService.saveProjects(projects);
+                         } else {
+                             System.err.println("Error: Failed to increment available units during withdrawal (already at max?).");
+                         }
                      } else {
                           System.err.println("Error: Could not find flat type details to increment units during withdrawal.");
                      }
@@ -2022,7 +2163,7 @@ class ApplicantController extends BaseController {
             // Update applicant's state in User object
             applicant.setApplicationStatus(ApplicationStatus.WITHDRAWN);
             applicant.setBookedFlatType(null); // Clear booked type if any
-            // Keep appliedProjectName? Or clear? Let's keep it for history, hasApplied() handles the logic.
+            // Keep appliedProjectName? Or clear? Let's keep it for history, hasActiveApplication() handles the logic.
             // applicant.clearApplicationState(); // Use this if we want to fully reset
 
             System.out.println("Application withdrawn successfully.");
@@ -2041,8 +2182,8 @@ class ApplicantController extends BaseController {
     public void submitEnquiry() {
         System.out.println("\n--- Submit Enquiry ---");
         // List projects user can see (optional, could allow enquiry about any project name)
-        // Filter: Visible=true, Eligibility=false, Availability=false, Period=false -> Show all potentially visible
-        List<Project> viewableProjects = getFilteredProjects(true, false, false, false);
+        // Filter: Visible=true, Eligibility=false, Availability=false, Period=false, NotExpired=false -> Show all potentially visible
+        List<Project> viewableProjects = getFilteredProjects(true, false, false, false, false);
         Project selectedProject = null;
 
         if (!viewableProjects.isEmpty()) {
@@ -2216,7 +2357,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
         Date currentDate = DataService.getCurrentDate();
 
         // 1. Check Eligibility: Cannot register if has active BTO application
-        if (officer.hasApplied()) { // hasApplied checks for PENDING/SUCCESSFUL
+        if (officer.hasActiveApplication()) { // hasActiveApplication checks for PENDING/SUCCESSFUL
             System.out.println("Error: Cannot register to handle a project while you have an active BTO application (" + officer.getAppliedProjectName() + ", Status: " + officer.getApplicationStatus() + ").");
             return;
         }
@@ -2225,29 +2366,29 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
         System.out.println("\n--- Register to Handle Project ---");
 
         // Find projects officer is currently handling (approved)
-         String currentlyHandlingProjectName = officer.getHandlingProjectName();
-         Project currentlyHandlingProject = (currentlyHandlingProjectName != null) ? findProjectByName(currentlyHandlingProjectName) : null;
+         Project currentlyHandlingProject = getOfficerHandlingProject(officer);
 
         // Find projects officer has pending registrations for
-        List<String> pendingRegistrationProjects = officerRegistrations.values().stream()
+        List<Project> pendingRegistrationProjects = officerRegistrations.values().stream()
             .filter(reg -> reg.getOfficerNric().equals(officer.getNric()) && reg.getStatus() == OfficerRegistrationStatus.PENDING)
-            .map(OfficerRegistration::getProjectName)
+            .map(reg -> findProjectByName(reg.getProjectName()))
+            .filter(Objects::nonNull)
             .collect(Collectors.toList());
 
 
         List<Project> availableProjects = projects.stream()
-                // Basic criteria: Has slots, officer not already approved/pending for *this* project
+                // Basic criteria: Has slots, officer not already approved/pending for *this* project, project not expired
                 .filter(p -> p.getRemainingOfficerSlots() > 0)
-                .filter(p -> !p.getApprovedOfficerNrics().contains(officer.getNric()))
-                .filter(p -> pendingRegistrationProjects.stream().noneMatch(pendingName -> pendingName.equals(p.getProjectName())))
+                .filter(p -> !p.isApplicationPeriodExpired(currentDate)) // Check not expired
+                .filter(p -> officerRegistrations.values().stream() // Check not already registered (any status) for this project
+                                .noneMatch(reg -> reg.getOfficerNric().equals(officer.getNric()) &&
+                                                  reg.getProjectName().equals(p.getProjectName())))
                 // Conflict Check 1: Cannot register if already handling a project with overlapping dates
                 .filter(p -> currentlyHandlingProject == null || !checkDateOverlap(p, currentlyHandlingProject))
                 // Conflict Check 2: Cannot register if pending for another project with overlapping dates
                 .filter(p -> pendingRegistrationProjects.stream()
-                                .map(this::findProjectByName) // Get Project objects for pending regs
-                                .filter(Objects::nonNull)
                                 .noneMatch(pendingProject -> checkDateOverlap(p, pendingProject)))
-                // Conflict Check 3: Cannot register for a project they have *ever* applied for
+                // Conflict Check 3: Cannot register for a project they have *ever* applied for (any status)
                  .filter(p -> applications.values().stream()
                                 .noneMatch(app -> app.getApplicantNric().equals(officer.getNric()) &&
                                                   app.getProjectName().equals(p.getProjectName())))
@@ -2256,15 +2397,16 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
 
         if (availableProjects.isEmpty()) {
             System.out.println("No projects currently available for you to register for based on eligibility criteria:");
-            System.out.println("- Project must have open officer slots.");
-            System.out.println("- You must not already be approved or have a pending registration for the project.");
-            System.out.println("- You cannot have an active BTO application.");
+            System.out.println("- Project must have open officer slots and not be expired.");
+            System.out.println("- You must not already have a registration (Pending/Approved/Rejected) for the project.");
+            System.out.println("- You cannot have an active BTO application (Pending/Successful).");
             System.out.println("- You cannot register if the project's dates overlap with a project you are already handling or have a pending registration for.");
              System.out.println("- You cannot register for a project you have previously applied for.");
             return;
         }
 
         // 3. Select Project and Submit Registration
+        // Show projects regardless of visibility toggle for officers
         viewAndSelectProject(availableProjects, "Select Project to Register For");
         Project selectedProject = selectProjectFromList(availableProjects);
 
@@ -2278,43 +2420,30 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
         }
     }
 
-    // Helper to check if two projects' application periods overlap
-    private boolean checkDateOverlap(Project p1, Project p2) {
-        if (p1 == null || p2 == null || p1.getApplicationOpeningDate() == null || p1.getApplicationClosingDate() == null || p2.getApplicationOpeningDate() == null || p2.getApplicationClosingDate() == null) {
-            return false; // Cannot determine overlap if dates are missing
-        }
-        // Overlap exists if p1 starts before p2 ends AND p1 ends after p2 starts
-        return p1.getApplicationOpeningDate().before(p2.getApplicationClosingDate()) &&
-               p1.getApplicationClosingDate().after(p2.getApplicationOpeningDate());
-    }
-
-
     public void viewRegistrationStatus() {
         HDBOfficer officer = (HDBOfficer) currentUser;
         System.out.println("\n--- Your HDB Officer Registration Status ---");
 
         // Show currently handled project first
-        if (officer.getHandlingProjectName() != null) {
-             System.out.println("You are currently APPROVED and HANDLING project: " + officer.getHandlingProjectName());
+        Project handlingProject = getOfficerHandlingProject(officer);
+        if (handlingProject != null) {
+             System.out.println("You are currently APPROVED and HANDLING project: " + handlingProject.getProjectName());
              System.out.println("----------------------------------------");
         }
 
         // Show other registrations (Pending, Rejected, or Approved but maybe for past projects)
         List<OfficerRegistration> myRegistrations = officerRegistrations.values().stream()
                 .filter(reg -> reg.getOfficerNric().equals(officer.getNric()))
-                // Exclude the currently handled one if shown above? No, show all history.
+                // Exclude the currently handled one if shown above
+                .filter(reg -> handlingProject == null || !reg.getProjectName().equals(handlingProject.getProjectName()))
                 .sorted(Comparator.comparing(OfficerRegistration::getRegistrationDate).reversed())
                 .collect(Collectors.toList());
 
-        if (myRegistrations.isEmpty()) {
+        if (myRegistrations.isEmpty() && handlingProject == null) {
             System.out.println("You have no past or pending registration requests.");
-        } else {
-            System.out.println("Registration History/Requests:");
+        } else if (!myRegistrations.isEmpty()) {
+            System.out.println("Other Registration History/Requests:");
             for (OfficerRegistration reg : myRegistrations) {
-                // Don't show the currently handled one again if already displayed
-                if (reg.getStatus() == OfficerRegistrationStatus.APPROVED && reg.getProjectName().equals(officer.getHandlingProjectName())) {
-                    continue;
-                }
                 System.out.printf("- Project: %-15s | Status: %-10s | Date: %s\n",
                         reg.getProjectName(), reg.getStatus(), DataService.formatDate(reg.getRegistrationDate()));
             }
@@ -2323,37 +2452,29 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
 
     public void viewHandlingProjectDetails() {
         HDBOfficer officer = (HDBOfficer) currentUser;
-        String handlingProjectName = officer.getHandlingProjectName();
+        Project project = getOfficerHandlingProject(officer);
 
-        if (handlingProjectName == null) {
+        if (project == null) {
             System.out.println("You are not currently handling any project. Register for one first.");
             return;
         }
 
-        Project project = findProjectByName(handlingProjectName);
-        if (project == null) {
-            System.out.println("Error: Details for your handling project '" + handlingProjectName + "' could not be found (possibly deleted).");
-            // Clear the handling project name if it's invalid?
-            // officer.setHandlingProjectName(null);
-            // DataService.saveUsers(users); // If state is changed
-            return;
-        }
-
         System.out.println("\n--- Details for Handling Project: " + project.getProjectName() + " ---");
-        // Use the standard display method, but maybe show more details?
-        // The standard viewAndSelectProject shows most relevant info.
+        // Use the standard display method, which shows relevant info.
+        // Officers see projects they handle regardless of visibility toggle.
         viewAndSelectProject(Collections.singletonList(project), "Project Details");
         // Officers cannot edit details.
     }
 
     public void viewAndReplyToEnquiries() {
          HDBOfficer officer = (HDBOfficer) currentUser;
-         String handlingProjectName = officer.getHandlingProjectName();
+         Project handlingProject = getOfficerHandlingProject(officer);
 
-         if (handlingProjectName == null) {
+         if (handlingProject == null) {
              System.out.println("You need to be handling a project to view and reply to its enquiries.");
              return;
          }
+         String handlingProjectName = handlingProject.getProjectName();
 
          System.out.println("\n--- Enquiries for Project: " + handlingProjectName + " ---");
          List<Enquiry> projectEnquiries = enquiries.stream()
@@ -2425,17 +2546,13 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
 
     public void manageFlatBooking() {
         HDBOfficer officer = (HDBOfficer) currentUser;
-        String handlingProjectName = officer.getHandlingProjectName();
+        Project project = getOfficerHandlingProject(officer);
 
-        if (handlingProjectName == null) {
+        if (project == null) {
             System.out.println("You need to be handling a project to manage flat bookings.");
             return;
         }
-        Project project = findProjectByName(handlingProjectName);
-         if (project == null) {
-             System.out.println("Error: Details for your handling project '" + handlingProjectName + "' could not be found.");
-             return;
-         }
+        String handlingProjectName = project.getProjectName();
 
         System.out.println("\n--- Flat Booking Management for Project: " + handlingProjectName + " ---");
 
@@ -2521,7 +2638,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
         System.out.println("Applicant: " + applicant.getName() + " (" + applicant.getNric() + ")");
         System.out.println("Project: " + applicationToBook.getProjectName());
         System.out.println("Flat Type: " + appliedFlatType.getDisplayName());
-        System.out.println("Available Units: " + details.getAvailableUnits());
+        System.out.println("Available Units Before Booking: " + details.getAvailableUnits());
         System.out.printf("Selling Price: $%.2f\n", details.getSellingPrice());
 
         System.out.print("\nConfirm booking for this applicant? (yes/no): ");
@@ -2597,22 +2714,9 @@ class ManagerController extends BaseController {
 
     public void createProject() {
         HDBManager manager = (HDBManager) currentUser; // Safe cast
-        Date currentDate = DataService.getCurrentDate();
 
-        // Check: Manager cannot create if already managing another project with overlapping *active* period
-        // Definition of Active: Application period is ongoing OR in the future? Let's say ongoing.
-        boolean handlingActiveProject = projects.stream()
-                .filter(p -> p.getManagerNric().equals(manager.getNric()))
-                .anyMatch(p -> p.isApplicationPeriodActive(currentDate)); // Check if current date falls within period
-        
-        if (handlingActiveProject) {
-            System.out.println("Error: You are already managing an active project. Cannot create a new one until the current project is closed.");
-            return;
-        }
         // Requirement 18: "System prevents assigning more than one project to a manager within the same application dates"
-        // This is ambiguous. Does it mean the *exact same* start/end dates? Or any overlap?
-        // Let's assume *any overlap* with a project they already manage.
-        // We need to check the proposed dates against all existing projects managed by this manager.
+        // Check the proposed dates against *all* existing projects managed by this manager for *any* overlap.
 
         System.out.println("\n--- Create New BTO Project ---");
 
@@ -2675,16 +2779,15 @@ class ManagerController extends BaseController {
                 continue;
             }
 
+            // Create a temporary project object with the proposed dates for overlap check
+            Project proposedProjectDates = new Project(
+                "__temp__", "__temp__", flatTypes, openingDate, closingDate, manager.getNric(), 0, null, false
+            );
+
             // Check for overlap with existing managed projects
-            final Date finalOpening = openingDate; // Need final for lambda
-            final Date finalClosing = closingDate;
             boolean overlaps = projects.stream()
                 .filter(p -> p.getManagerNric().equals(manager.getNric()))
-                .anyMatch(existingProject -> {
-                    // Check overlap: new_start < existing_end AND new_end > existing_start
-                    return finalOpening.before(existingProject.getApplicationClosingDate()) &&
-                           finalClosing.after(existingProject.getApplicationOpeningDate());
-                });
+                .anyMatch(existingProject -> checkDateOverlap(proposedProjectDates, existingProject));
 
             if (overlaps) {
                  System.out.println("Error: The specified application period overlaps with another project you manage. Please enter different dates.");
@@ -2709,8 +2812,11 @@ class ManagerController extends BaseController {
 
     public void editProject() {
         System.out.println("\n--- Edit BTO Project ---");
-        List<Project> myProjects = getManagedProjects();
-        if (myProjects.isEmpty()) return;
+        List<Project> myProjects = getManagedProjects(false); // Get managed projects, ignore filters for selection
+        if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+        }
 
         viewAndSelectProject(myProjects, "Select Project to Edit");
         Project projectToEdit = selectProjectFromList(myProjects);
@@ -2776,9 +2882,16 @@ class ManagerController extends BaseController {
 
         // If dates changed, re-check overlap, excluding the project being edited itself
         if (datesChanged && datesValid) {
+             // Create a temporary project object with the proposed dates for overlap check
+             Project proposedProjectDates = new Project(
+                 projectToEdit.getProjectName(), projectToEdit.getNeighborhood(), projectToEdit.getFlatTypes(),
+                 finalOpening, finalClosing, projectToEdit.getManagerNric(), projectToEdit.getMaxOfficerSlots(),
+                 projectToEdit.getApprovedOfficerNrics(), projectToEdit.isVisible()
+             );
+
              boolean overlaps = projects.stream()
                 .filter(p -> p.getManagerNric().equals(currentUser.getNric()) && !p.equals(projectToEdit)) // Exclude self
-                .anyMatch(existingProject -> finalOpening.before(existingProject.getApplicationClosingDate()) && finalClosing.after(existingProject.getApplicationOpeningDate()));
+                .anyMatch(existingProject -> checkDateOverlap(proposedProjectDates, existingProject));
 
              if (overlaps) {
                  System.out.println("Error: The new application period overlaps with another project you manage. Dates not updated.");
@@ -2803,7 +2916,11 @@ class ManagerController extends BaseController {
              try {
                  int newMaxSlots = Integer.parseInt(slotsInput);
                  // setMaxOfficerSlots handles validation (>= approved count)
-                 projectToEdit.setMaxOfficerSlots(newMaxSlots); // Setter will print warning if invalid
+                 if (newMaxSlots >= 1 && newMaxSlots <= 10) {
+                    projectToEdit.setMaxOfficerSlots(newMaxSlots); // Setter will print warning if invalid
+                 } else {
+                     System.out.println("Max slots must be between 1 and 10. Keeping original value.");
+                 }
              } catch (NumberFormatException e) {
                   System.out.println("Invalid number format. Max slots not changed.");
              }
@@ -2816,41 +2933,59 @@ class ManagerController extends BaseController {
 
     public void deleteProject() {
          System.out.println("\n--- Delete BTO Project ---");
-         List<Project> myProjects = getManagedProjects();
-         if (myProjects.isEmpty()) return;
+         List<Project> myProjects = getManagedProjects(false); // Ignore filters for selection
+         if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+         }
 
         viewAndSelectProject(myProjects, "Select Project to Delete");
         Project projectToDelete = selectProjectFromList(myProjects);
         if (projectToDelete == null) return; // Cancelled
 
         // Check for active associations before deleting
-        boolean hasApplications = applications.values().stream()
+        boolean hasActiveApplications = applications.values().stream()
             .anyMatch(app -> app.getProjectName().equals(projectToDelete.getProjectName()) &&
-                             app.getStatus() != ApplicationStatus.WITHDRAWN && // Ignore withdrawn/unsuccessful?
-                             app.getStatus() != ApplicationStatus.UNSUCCESSFUL);
-        boolean hasOfficers = !projectToDelete.getApprovedOfficerNrics().isEmpty();
-        boolean hasRegistrations = officerRegistrations.values().stream()
-            .anyMatch(reg -> reg.getProjectName().equals(projectToDelete.getProjectName()) &&
-                             reg.getStatus() != OfficerRegistrationStatus.REJECTED); // Ignore rejected?
+                             (app.getStatus() == ApplicationStatus.PENDING ||
+                              app.getStatus() == ApplicationStatus.SUCCESSFUL ||
+                              app.getStatus() == ApplicationStatus.BOOKED)); // Check active statuses
 
-        if (hasApplications || hasOfficers || hasRegistrations) {
-            System.out.println("Warning: This project has associated applications, officers, or registrations.");
-            System.out.println("Deleting the project will NOT automatically remove these associated records.");
-            // Consider implications: Orphaned records might cause issues elsewhere.
-            // A safer approach might be to disallow deletion if active associations exist.
-            System.out.print("Are you sure you want to permanently delete project '" + projectToDelete.getProjectName() + "' anyway? (yes/no): ");
-        } else {
-             System.out.print("Are you sure you want to permanently delete project '" + projectToDelete.getProjectName() + "'? (yes/no): ");
+        boolean hasActiveRegistrations = officerRegistrations.values().stream()
+            .anyMatch(reg -> reg.getProjectName().equals(projectToDelete.getProjectName()) &&
+                             (reg.getStatus() == OfficerRegistrationStatus.PENDING ||
+                              reg.getStatus() == OfficerRegistrationStatus.APPROVED)); // Check active statuses
+
+        if (hasActiveApplications || hasActiveRegistrations) {
+            System.out.println("Error: Cannot delete project '" + projectToDelete.getProjectName() + "'.");
+            if (hasActiveApplications) System.out.println("- It has active BTO applications (Pending/Successful/Booked).");
+            if (hasActiveRegistrations) System.out.println("- It has active Officer registrations (Pending/Approved).");
+            System.out.println("Resolve these associations before deleting.");
+            return; // Prevent deletion
         }
 
+        // If no active associations, confirm deletion
+        System.out.print("Are you sure you want to permanently delete project '" + projectToDelete.getProjectName() + "'? This will also remove associated historical applications/registrations/enquiries. (yes/no): ");
         String confirm = scanner.nextLine().trim().toLowerCase();
 
         if (confirm.equals("yes")) {
+            String deletedProjectName = projectToDelete.getProjectName();
             if (projects.remove(projectToDelete)) {
                 System.out.println("Project deleted successfully.");
-                // Save projects
+                // Also remove associated data for cleanliness
+                boolean removedApps = applications.values().removeIf(app -> app.getProjectName().equals(deletedProjectName));
+                boolean removedRegs = officerRegistrations.values().removeIf(reg -> reg.getProjectName().equals(deletedProjectName));
+                boolean removedEnqs = enquiries.removeIf(enq -> enq.getProjectName().equals(deletedProjectName));
+
+                if (removedApps) System.out.println("Removed associated applications.");
+                if (removedRegs) System.out.println("Removed associated officer registrations.");
+                if (removedEnqs) System.out.println("Removed associated enquiries.");
+
+                // Save all affected data files
                 DataService.saveProjects(projects);
-                // Note: Associated records remain. Might need manual cleanup or a more robust delete strategy.
+                if (removedApps) DataService.saveApplications(applications);
+                if (removedRegs) DataService.saveOfficerRegistrations(officerRegistrations);
+                if (removedEnqs) DataService.saveEnquiries(enquiries);
+
             } else {
                  System.err.println("Error: Failed to remove project from list.");
             }
@@ -2861,8 +2996,11 @@ class ManagerController extends BaseController {
 
     public void toggleProjectVisibility() {
         System.out.println("\n--- Toggle Project Visibility ---");
-        List<Project> myProjects = getManagedProjects();
-        if (myProjects.isEmpty()) return;
+        List<Project> myProjects = getManagedProjects(false); // Ignore filters for selection
+        if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+        }
 
         viewAndSelectProject(myProjects, "Select Project to Toggle Visibility");
         Project projectToToggle = selectProjectFromList(myProjects);
@@ -2878,46 +3016,41 @@ class ManagerController extends BaseController {
 
     public void viewAllProjects() {
         System.out.println("\n--- View All Projects (Manager View) ---");
-        // Managers see all projects, filters apply, visibility/eligibility checks off
-        List<Project> displayProjects = getFilteredProjects(false, false, false, false);
+        // Managers see all projects, filters apply, visibility/eligibility checks off, show expired
+        List<Project> displayProjects = getFilteredProjects(false, false, false, false, false);
         viewAndSelectProject(displayProjects, "All BTO Projects");
     }
 
     public void viewMyProjects() {
         System.out.println("\n--- View My Managed Projects ---");
-        List<Project> myProjects = getManagedProjects(); // Uses helper
+        List<Project> myProjects = getManagedProjects(true); // Uses helper, applies filters
         viewAndSelectProject(myProjects, "Projects Managed By You");
     }
 
-    // Helper to get projects managed by the current manager, applying filters
-    private List<Project> getManagedProjects() {
+    // Helper to get projects managed by the current manager
+    private List<Project> getManagedProjects(boolean applyUserFilters) {
          List<Project> managed = projects.stream()
                                            .filter(p -> p.getManagerNric().equals(currentUser.getNric()))
-                                           // Apply user's saved filters
-                                           .filter(p -> filterLocation == null || p.getNeighborhood().equalsIgnoreCase(filterLocation))
-                                           .filter(p -> filterFlatType == null || p.getFlatTypes().containsKey(filterFlatType))
+                                           // Apply user's saved filters only if requested
+                                           .filter(p -> !applyUserFilters || filterLocation == null || p.getNeighborhood().equalsIgnoreCase(filterLocation))
+                                           .filter(p -> !applyUserFilters || filterFlatType == null || p.getFlatTypes().containsKey(filterFlatType))
                                            .sorted(Comparator.comparing(Project::getProjectName))
                                            .collect(Collectors.toList());
-          if (managed.isEmpty()) {
+          if (managed.isEmpty() && applyUserFilters) {
             System.out.println("You are not managing any projects" + (filterLocation != null || filterFlatType != null ? " matching the current filters." : "."));
+          } else if (managed.isEmpty() && !applyUserFilters) {
+              System.out.println("You are not managing any projects.");
           }
           return managed;
     }
 
-    // Helper to check if two projects' application periods overlap
-    private boolean checkDateOverlap(Project p1, Project p2) {
-        if (p1 == null || p2 == null || p1.getApplicationOpeningDate() == null || p1.getApplicationClosingDate() == null || p2.getApplicationOpeningDate() == null || p2.getApplicationClosingDate() == null) {
-            return false; // Cannot determine overlap if dates are missing
-        }
-        // Overlap exists if p1 starts before p2 ends AND p1 ends after p2 starts
-        return p1.getApplicationOpeningDate().before(p2.getApplicationClosingDate()) &&
-               p1.getApplicationClosingDate().after(p2.getApplicationOpeningDate());
-    }
-
     public void manageOfficerRegistrations() {
         System.out.println("\n--- Manage HDB Officer Registrations ---");
-        List<Project> myProjects = getManagedProjects(); // Get only managed projects
-        if (myProjects.isEmpty()) return;
+        List<Project> myProjects = getManagedProjects(false); // Ignore filters for selection
+        if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+        }
 
         System.out.println("Select project to manage registrations for:");
         viewAndSelectProject(myProjects, "Select Project"); // Show only managed projects
@@ -2974,14 +3107,8 @@ class ManagerController extends BaseController {
                              System.out.println("Cannot approve. No remaining officer slots for this project.");
                          }
                          // Check if officer is already handling another overlapping project
-                         else if (officer.getHandlingProjectName() != null && !officer.getHandlingProjectName().equals(selectedProject.getProjectName())) {
-                              Project currentHandling = findProjectByName(officer.getHandlingProjectName());
-                              if (currentHandling != null && checkDateOverlap(selectedProject, currentHandling)) {
-                                   System.out.println("Cannot approve. Officer is already handling project '" + officer.getHandlingProjectName() + "' which has overlapping dates.");
-                              } else {
-                                   // Proceed with approval (no overlap or current project not found)
-                                   approveOfficerRegistration(regToProcess, selectedProject, officer);
-                              }
+                         else if (isOfficerHandlingOverlappingProject(officer, selectedProject)) {
+                              System.out.println("Cannot approve. Officer is already handling another project with overlapping dates.");
                          }
                          else {
                              // Proceed with approval
@@ -3014,16 +3141,32 @@ class ManagerController extends BaseController {
          else rejected.forEach(reg -> System.out.println("- NRIC: " + reg.getOfficerNric() + " | Date: " + DataService.formatDate(reg.getRegistrationDate())));
     }
 
+    // Helper to check if officer handles any *other* project overlapping with the target project
+    private boolean isOfficerHandlingOverlappingProject(HDBOfficer officer, Project targetProject) {
+        return officerRegistrations.values().stream()
+            .filter(reg -> reg.getOfficerNric().equals(officer.getNric()) &&
+                           reg.getStatus() == OfficerRegistrationStatus.APPROVED &&
+                           !reg.getProjectName().equals(targetProject.getProjectName())) // Exclude the target project itself
+            .map(reg -> findProjectByName(reg.getProjectName()))
+            .filter(Objects::nonNull)
+            .anyMatch(otherProject -> checkDateOverlap(targetProject, otherProject));
+    }
+
+
     // Helper method for approving officer registration
     private void approveOfficerRegistration(OfficerRegistration registration, Project project, HDBOfficer officer) {
+        // Double check slots again before committing
+        if (project.getRemainingOfficerSlots() <= 0) {
+             System.out.println("Error: No remaining officer slots. Approval aborted.");
+             return;
+        }
         if (project.addApprovedOfficer(registration.getOfficerNric())) {
              registration.setStatus(OfficerRegistrationStatus.APPROVED);
-             officer.setHandlingProjectName(project.getProjectName()); // Update officer's state
+             // No need to set handlingProjectName on officer object
              System.out.println("Registration Approved. Officer " + registration.getOfficerNric() + " added to project.");
              // Save all relevant data
              DataService.saveOfficerRegistrations(officerRegistrations);
              DataService.saveProjects(projects);
-             // User state (handling project) is derived on load, no need to save users specifically for this
          } else {
              // This should ideally not happen if slot check was done before calling
              System.err.println("Error: Failed to add officer to project's approved list (unexpected). Approval aborted.");
@@ -3033,8 +3176,11 @@ class ManagerController extends BaseController {
 
     public void manageApplications() {
         System.out.println("\n--- Manage BTO Applications ---");
-        List<Project> myProjects = getManagedProjects();
-        if (myProjects.isEmpty()) return;
+        List<Project> myProjects = getManagedProjects(false); // Ignore filters for selection
+        if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+        }
 
         System.out.println("Select project to manage applications for:");
         viewAndSelectProject(myProjects, "Select Project");
@@ -3129,7 +3275,7 @@ class ManagerController extends BaseController {
                              DataService.saveApplications(applications);
                              // User state derived on load
                          } else {
-                             System.out.println("Cannot approve. The number of successful/booked applications already meets the total supply for " + appliedType.getDisplayName() + ".");
+                             System.out.println("Cannot approve. The number of successful/booked applications already meets or exceeds the total supply (" + details.getTotalUnits() + ") for " + appliedType.getDisplayName() + ".");
                              // Optionally, auto-reject? Or leave pending? Let's leave pending.
                              // appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
                              // applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
@@ -3186,15 +3332,18 @@ class ManagerController extends BaseController {
         List<Project> projectsToReportOn = new ArrayList<>();
         if (projectFilterChoice == 0) return; // Cancelled
         if (projectFilterChoice == 1) {
-            projectsToReportOn = getManagedProjects(); // Get all managed projects (applies location/type filters)
+            projectsToReportOn = getManagedProjects(true); // Get all managed projects (applies location/type filters from BaseController state)
             if (projectsToReportOn.isEmpty()) {
-                 System.out.println("You manage no projects" + (filterLocation != null || filterFlatType != null ? " matching the current filters." : "."));
+                 // Message handled by getManagedProjects
                  return;
             }
-             System.out.println("Reporting on all projects you manage" + (filterLocation != null || filterFlatType != null ? " (matching filters)." : "."));
+             System.out.println("Reporting on all projects you manage" + (filterLocation != null || filterFlatType != null ? " (matching current view filters)." : "."));
         } else { // projectFilterChoice == 2
-            List<Project> myProjects = getManagedProjects(); // Get managed projects (applies filters)
-            if (myProjects.isEmpty()) return;
+            List<Project> myProjects = getManagedProjects(false); // Get managed projects (ignore view filters for selection)
+            if (myProjects.isEmpty()) {
+                 System.out.println("You are not managing any projects.");
+                 return;
+            }
             viewAndSelectProject(myProjects, "Select Specific Project to Report On");
             Project specificProject = selectProjectFromList(myProjects);
             if (specificProject == null) return; // Cancelled selection
@@ -3248,7 +3397,7 @@ class ManagerController extends BaseController {
                 if (user == null) return false; // Skip if user not found
                 if (finalFilterMaritalStatus != null && user.getMaritalStatus() != finalFilterMaritalStatus) return false;
                 if (finalMinAge > 0 && user.getAge() < finalMinAge) return false;
-                if (finalMaxAge > 0 && user.getAge() > finalMaxAge) return false;
+                if (finalMaxAge > 0 && user.getAge() > finalMaxAge) return false; // Use > for max age check
                 return true;
             })
             .sorted(Comparator.comparing(BTOApplication::getProjectName).thenComparing(BTOApplication::getApplicantNric)) // Sort results
@@ -3301,7 +3450,7 @@ class ManagerController extends BaseController {
     // View and potentially reply to enquiries for projects managed by this manager
     public void viewAndReplyToManagedEnquiries() {
         System.out.println("\n--- View/Reply Enquiries (Managed Projects) ---");
-        List<String> myManagedProjectNames = getManagedProjects().stream() // Use helper to get filtered list of projects
+        List<String> myManagedProjectNames = getManagedProjects(true).stream() // Use helper to get filtered list of projects
                                            .map(Project::getProjectName)
                                            .collect(Collectors.toList());
 
@@ -3547,9 +3696,10 @@ class OfficerView extends BaseView {
         while (!logout) {
             System.out.println("\n=========== HDB Officer Menu ===========");
             System.out.println("Welcome, Officer " + currentUser.getName() + "!");
-            String handlingProject = ((HDBOfficer)currentUser).getHandlingProjectName();
+            // Get handling project dynamically
+            Project handlingProject = officerController.getOfficerHandlingProject((HDBOfficer)currentUser);
             if (handlingProject != null) {
-                 System.out.println("--> Currently Handling Project: " + handlingProject + " <--");
+                 System.out.println("--> Currently Handling Project: " + handlingProject.getProjectName() + " <--");
             } else {
                  System.out.println("--> Not currently handling any project <--");
             }
@@ -3642,7 +3792,7 @@ class ManagerView extends BaseView {
             System.out.println("10. View Enquiries (ALL Projects)");
             System.out.println("11. View/Reply Enquiries (My Managed Projects)");
             System.out.println("--- Common Actions ---");
-            System.out.println("12. Apply/Clear Project Filters (Affects Views 5, 6, 11)");
+            System.out.println("12. Apply/Clear Project Filters (Affects Views 5, 6, 9, 11)");
             System.out.println("13. Change Password");
             System.out.println(" 0. Logout");
             System.out.println("========================================");
@@ -3795,10 +3945,19 @@ public class BTOApp {
     public void shutdown() {
         System.out.println("\nShutting down BTO Management System...");
         // Save all data using the DataService method
-        DataService.saveAllData(users, projects, applications, enquiries, officerRegistrations);
+        // Ensure data is not null before saving (might happen if init failed badly)
+        if (this.users != null && this.projects != null && this.applications != null && this.enquiries != null && this.officerRegistrations != null) {
+            DataService.saveAllData(users, projects, applications, enquiries, officerRegistrations);
+        } else {
+             System.err.println("Shutdown: Data not fully initialized, cannot save.");
+        }
         // Close the scanner
         if (scanner != null) {
-            scanner.close();
+            try {
+                scanner.close();
+            } catch (IllegalStateException e) {
+                // Ignore if already closed
+            }
         }
         System.out.println("System shutdown complete.");
     }
@@ -3807,19 +3966,14 @@ public class BTOApp {
     public static void main(String[] args) {
         BTOApp app = new BTOApp();
         try {
-            app.initialize();
-
-            // Add shutdown hook to save data gracefully on unexpected exit (Ctrl+C, etc.)
+            // Add shutdown hook *before* initialization, so it's always registered
             // This hook runs in a separate thread.
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("Shutdown hook triggered...");
-                // Ensure data is not null before saving (might happen if init failed badly)
-                if (app.users != null && app.projects != null && app.applications != null && app.enquiries != null && app.officerRegistrations != null) {
-                     app.shutdown(); // Call the shutdown method which saves data
-                } else {
-                     System.err.println("Shutdown hook: Data not initialized, cannot save.");
-                }
+                System.out.println("\nShutdown hook triggered...");
+                app.shutdown(); // Call the shutdown method which saves data and closes scanner
             }));
+
+            app.initialize();
 
             // Start the main application loop
             app.run();
@@ -3827,15 +3981,10 @@ public class BTOApp {
         } catch (Exception e) {
              System.err.println("An unexpected critical error occurred in the main application thread: " + e.getMessage());
              e.printStackTrace();
-             // Attempt to shutdown/save even if an error occurred during run
-             // Note: Shutdown hook will likely handle saving, but calling explicitly might be desired
-             // app.shutdown(); // Be cautious calling this here if shutdown hook is also active
-        } finally {
-             // Ensure scanner is closed if shutdown wasn't called normally (e.g., error before run loop exit)
-             if (app.scanner != null) {
-                 // Check if already closed by shutdown()
-                 // Scanner doesn't have an isClosed() method easily, rely on shutdown hook/normal exit.
-             }
+             // Shutdown hook will attempt to save data and close resources.
+             // No need to call app.shutdown() explicitly here as the hook will run on JVM exit.
         }
+        // Normal exit after run() loop finishes (e.g., user chooses not to retry login)
+        // Shutdown hook will still run here.
     }
 }

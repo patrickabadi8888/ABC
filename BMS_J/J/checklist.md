@@ -63,10 +63,9 @@
   - Failure: Incorrect retrieval or updates, or failure to reflect booking details accurately
   - Comments: Currently applicant choose whether to apply for 2 or 3 room BTO, I assume that is correct.
 
-- [ ] **16. Receipt Generation for Flat Booking**  
+- [x] **16. Receipt Generation for Flat Booking**  
   - Expected: Accurate and complete receipts are generated for each successful booking  
   - Failure: Receipts are incomplete, inaccurate, or fail to generate
-  - Comments: No option to generate receipt for officer
 
 - [x] **17. Create, Edit, and Delete BTO Project Listings**  
   - Expected: Managers can add new projects, modify existing details, and remove projects  
@@ -93,7 +92,7 @@
 - [ ] **22. Approve or Reject BTO Applications and Withdrawals**  
   - Expected: Approvals and rejections process correctly, with system updates reflecting the decisions  
   - Failure: Incorrect or failed processing of applications or withdrawals
-  - Applicant can withdraw but is instantly withdrawn without waiting for approval. But can approve BTO applications and officer can help book after.
+  - Applicant can withdraw but is instantly withdrawn without waiting for approval. 
   
 - [x] **23. Generate and Filter Reports**  
   - Expected: Accurate report generation with options to filter by various categories  
