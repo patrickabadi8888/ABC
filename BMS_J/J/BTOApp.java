@@ -9,71 +9,15 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import Enums.FlatType;
+import Enums.MaritalStatus;
+import Enums.OfficerRegistrationStatus;
+import Enums.UserRole;
+import Enums.ApplicationStatus;
+
 // ==================
 // Enums (Added PENDING_WITHDRAWAL to ApplicationStatus)
 // ==================
-
-enum MaritalStatus {
-    SINGLE, MARRIED
-}
-
-enum FlatType {
-    TWO_ROOM("2-Room"), THREE_ROOM("3-Room");
-
-    private final String displayName;
-
-    FlatType(String displayName) {
-        this.displayName = displayName;
-    }
-
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    public static FlatType fromDisplayName(String displayName) {
-        for (FlatType type : FlatType.values()) {
-            if (type.displayName.equalsIgnoreCase(displayName)) {
-                return type;
-            }
-        }
-        throw new IllegalArgumentException("Unknown flat type display name: " + displayName);
-    }
-
-    // Helper to convert string (name or display name) to enum
-    public static FlatType fromString(String text) {
-        if (text != null) {
-            for (FlatType b : FlatType.values()) {
-                // Check both enum constant name and display name, case-insensitive
-                if (text.trim().equalsIgnoreCase(b.name()) || text.trim().equalsIgnoreCase(b.displayName)) {
-                    return b;
-                }
-            }
-            // Handle specific string representations if needed
-            if ("2-Room".equalsIgnoreCase(text.trim())) return TWO_ROOM;
-            if ("3-Room".equalsIgnoreCase(text.trim())) return THREE_ROOM;
-        }
-        // Consider throwing an exception if the text is non-null but doesn't match
-        // throw new IllegalArgumentException("Cannot parse FlatType from string: " + text);
-        return null; // Or return null if appropriate for the context (e.g., loading optional data)
-    }
-}
-
-enum ApplicationStatus {
-    PENDING,          // Initial state
-    SUCCESSFUL,       // Manager approved, applicant can book
-    UNSUCCESSFUL,     // Manager rejected, or withdrawal approved after SUCCESSFUL/BOOKED
-    BOOKED,           // Officer confirmed booking
-    PENDING_WITHDRAWAL, // Applicant requested withdrawal, awaiting Manager action
-    WITHDRAWN         // Manager approved withdrawal from PENDING state
-}
-
-enum OfficerRegistrationStatus {
-    PENDING, APPROVED, REJECTED
-}
-
-enum UserRole {
-    APPLICANT, HDB_OFFICER, HDB_MANAGER
-}
 
 // ==================
 // Models (Data Holders - SRP)
@@ -119,31 +63,6 @@ abstract class User {
 
     // Abstract method to enforce role definition in subclasses
     public abstract UserRole getRole();
-
-    // Override equals and hashCode for proper collection handling
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        User user = (User) o;
-        return nric.equals(user.nric);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(nric);
-    }
-
-    @Override
-    public String toString() {
-        return "User{" +
-               "nric='" + nric + '\'' +
-               ", name='" + name + '\'' +
-               ", age=" + age +
-               ", maritalStatus=" + maritalStatus +
-               ", role=" + getRole() +
-               '}';
-    }
 }
 
 class Applicant extends User {
@@ -439,29 +358,6 @@ class Project {
     protected FlatTypeDetails getMutableFlatTypeDetails(FlatType type) {
         return flatTypes.get(type);
     }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Project project = (Project) o;
-        return projectName.equalsIgnoreCase(project.projectName); // Uniqueness based on name (case-insensitive)
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(projectName.toLowerCase()); // Use lower case for consistent hashing
-    }
-
-    @Override
-    public String toString() {
-        return "Project{" +
-               "projectName='" + projectName + '\'' +
-               ", neighborhood='" + neighborhood + '\'' +
-               ", managerNric='" + managerNric + '\'' +
-               ", visibility=" + visibility +
-               '}';
-    }
 }
 
 // --- Application Tracking ---
@@ -539,18 +435,6 @@ class BTOApplication {
     // Let's assume it's fixed after initial application. If booking allows changing type, add setter.
     // public void setFlatTypeApplied(FlatType flatTypeApplied) { this.flatTypeApplied = flatTypeApplied; }
 
-     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        BTOApplication that = (BTOApplication) o;
-        return applicationId.equals(that.applicationId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(applicationId);
-    }
 }
 
 // --- Enquiry Tracking ---
@@ -663,19 +547,6 @@ class Enquiry {
     public boolean isReplied() {
         return this.replyText != null && !this.replyText.isEmpty();
     }
-
-     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Enquiry enquiry = (Enquiry) o;
-        return enquiryId.equals(enquiry.enquiryId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(enquiryId);
-    }
 }
 
 // --- Officer Registration Tracking ---
@@ -721,19 +592,6 @@ class OfficerRegistration {
         if (status != null) {
             this.status = status;
         }
-    }
-
-     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        OfficerRegistration that = (OfficerRegistration) o;
-        return registrationId.equals(that.registrationId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(registrationId);
     }
 }
 
@@ -1498,13 +1356,13 @@ class DataService {
         Path p = Paths.get(filename);
         String baseName = p.getFileName().toString();
 
-        if (baseName.equals(Paths.get(APPLICANT_LIST_FILE).getFileName().toString())) return APPLICANT_HEADER;
-        if (baseName.equals(Paths.get(OFFICER_LIST_FILE).getFileName().toString())) return OFFICER_HEADER;
-        if (baseName.equals(Paths.get(MANAGER_LIST_FILE).getFileName().toString())) return MANAGER_HEADER;
-        if (baseName.equals(Paths.get(PROJECT_FILE).getFileName().toString())) return PROJECT_HEADER;
-        if (baseName.equals(Paths.get(APPLICATION_FILE).getFileName().toString())) return APPLICATION_HEADER;
-        if (baseName.equals(Paths.get(ENQUIRY_FILE).getFileName().toString())) return ENQUIRY_HEADER;
-        if (baseName.equals(Paths.get(OFFICER_REGISTRATION_FILE).getFileName().toString())) return OFFICER_REGISTRATION_HEADER;
+        if (baseName.equals(APPLICANT_LIST_FILE)) return APPLICANT_HEADER;
+        if (baseName.equals(OFFICER_LIST_FILE)) return OFFICER_HEADER;
+        if (baseName.equals(MANAGER_LIST_FILE)) return MANAGER_HEADER;
+        if (baseName.equals(PROJECT_FILE)) return PROJECT_HEADER;
+        if (baseName.equals(APPLICATION_FILE)) return APPLICATION_HEADER;
+        if (baseName.equals(ENQUIRY_FILE)) return ENQUIRY_HEADER;
+        if (baseName.equals(OFFICER_REGISTRATION_FILE)) return OFFICER_REGISTRATION_HEADER;
         return null;
     }
 
