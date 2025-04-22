@@ -1,7 +1,7 @@
 Project Name,Neighborhood,Type 1,Number of units for Type 1,Selling price for Type 1,Type 2,Number of units for Type 2,Selling price for Type 2,Application opening date,Application closing date,Manager,Officer Slot,Officer,Visibility
 Acacia Breeze,Yishun,2-Room,2,350000.0,3-Room,2,450000.0,2025-03-02,2030-03-30,S5678901G,3,,1
-Acacia Eat,Bugis,2-Room,1,350000.0,3-Room,0,450000.0,2025-02-15,2030-03-30,S4678901G,3,"T3109876H;S6543210I;T2234567J",1
+Acacia Eat,Bugis,2-Room,1,350000.0,3-Room,0,450000.0,2060-02-15,2060-03-30,S4678901G,3,"T3109876H;S6543210I;T2234567J",1
 Acacia Expired,Yishun,2-Room,2,350000.0,3-Room,2,450000.0,2025-02-15,2025-02-16,T6765432F,3,,1
 Acacia Knee,Bedok,2-Room,1,350000.0,3-Room,1,450000.0,2025-02-15,2030-03-30,T7765432F,3,,0
 Acacia Tree,Yishun,2-Room,0,350000.0,3-Room,3,450000.0,2025-02-15,2030-03-30,S5678901G,3,,1
-Acacia Future,Yishun,2-Room,2,350000.0,3-Room,2,450000.0,2060-03-02,2090-03-30,T6765432F,3,T3109876H,1
+Acacia Future,Yishun,2-Room,2,350000.0,3-Room,2,450000.0,2025-03-02,2025-06-30,T6765432F,3,T3109876H,1

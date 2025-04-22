@@ -36,7 +36,7 @@
   - Failure: Enquiries cannot be submitted, edited, deleted, or do not display correctly
   - Comments: Officers don't work yet, so don't know if officer replying works, but can submit, print, edit, remove from applicant
 
-- [ ] **10. HDB Officer Registration Eligibility**  
+- [x] **10. HDB Officer Registration Eligibility**  
   - Expected: System allows registration only under compliant conditions  
   - Failure: System allows registration while the officer is an applicant or registered for another project in the same period
   - Comments: Officers can register expired projects
@@ -89,7 +89,7 @@
   - Failure: Mismanagement of registrations or slot counts do not update properly
   - Comment, can track number of officers for a project when view project, but officer slot we treat as static in dataset. Also if multiple people apply to same project, the csv only reflect 1, csv files also don't quite work yet, officers also only can apply for 1 project overall, should be able to apply for multiple as long as don't overlay
 
-- [ ] **22. Approve or Reject BTO Applications and Withdrawals**  
+- [x] **22. Approve or Reject BTO Applications and Withdrawals**  
   - Expected: Approvals and rejections process correctly, with system updates reflecting the decisions  
   - Failure: Incorrect or failed processing of applications or withdrawals
   - Applicant can withdraw but is instantly withdrawn without waiting for approval. 

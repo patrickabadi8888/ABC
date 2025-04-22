@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 // ==================
-// Enums (Remain largely unchanged, added fromString to FlatType)
+// Enums (Added PENDING_WITHDRAWAL to ApplicationStatus)
 // ==================
 
 enum MaritalStatus {
@@ -48,9 +48,9 @@ enum FlatType {
                     return b;
                 }
             }
-             // Handle specific string representations if needed
-             if ("2-Room".equalsIgnoreCase(text.trim())) return TWO_ROOM;
-             if ("3-Room".equalsIgnoreCase(text.trim())) return THREE_ROOM;
+            // Handle specific string representations if needed
+            if ("2-Room".equalsIgnoreCase(text.trim())) return TWO_ROOM;
+            if ("3-Room".equalsIgnoreCase(text.trim())) return THREE_ROOM;
         }
         // Consider throwing an exception if the text is non-null but doesn't match
         // throw new IllegalArgumentException("Cannot parse FlatType from string: " + text);
@@ -59,8 +59,12 @@ enum FlatType {
 }
 
 enum ApplicationStatus {
-    PENDING, SUCCESSFUL, UNSUCCESSFUL, BOOKED, WITHDRAWN
-    // PENDING_WITHDRAWAL // Add if manager approval for withdrawal is needed
+    PENDING,          // Initial state
+    SUCCESSFUL,       // Manager approved, applicant can book
+    UNSUCCESSFUL,     // Manager rejected, or withdrawal approved after SUCCESSFUL/BOOKED
+    BOOKED,           // Officer confirmed booking
+    PENDING_WITHDRAWAL, // Applicant requested withdrawal, awaiting Manager action
+    WITHDRAWN         // Manager approved withdrawal from PENDING state
 }
 
 enum OfficerRegistrationStatus {
@@ -144,6 +148,7 @@ abstract class User {
 
 class Applicant extends User {
     // State specific to an applicant's interaction with BTO applications
+    // This state should be considered potentially stale and synced from BTOApplication records on load/access
     private String appliedProjectName; // Track the project applied for
     private ApplicationStatus applicationStatus; // Track status for the applied project
     private FlatType bookedFlatType; // Track booked flat type if status is BOOKED
@@ -158,7 +163,7 @@ class Applicant extends User {
     @Override
     public UserRole getRole() { return UserRole.APPLICANT; }
 
-    // Getters and Setters specific to Applicant state
+    // Getters and Setters specific to Applicant state (used by sync logic primarily)
     public String getAppliedProjectName() { return appliedProjectName; }
     public void setAppliedProjectName(String appliedProjectName) { this.appliedProjectName = appliedProjectName; }
 
@@ -171,9 +176,15 @@ class Applicant extends User {
     // Convenience methods to check state
     public boolean hasActiveApplication() {
         // An applicant has an "active" application if status is PENDING or SUCCESSFUL
+        // PENDING_WITHDRAWAL is NOT considered active for purposes of applying again.
         return this.applicationStatus == ApplicationStatus.PENDING ||
                this.applicationStatus == ApplicationStatus.SUCCESSFUL;
     }
+
+     public boolean hasPendingWithdrawal() {
+        return this.applicationStatus == ApplicationStatus.PENDING_WITHDRAWAL;
+    }
+
 
     public boolean hasBooked() {
         return this.applicationStatus == ApplicationStatus.BOOKED && this.bookedFlatType != null;
@@ -400,11 +411,22 @@ class Project {
         return !currentDate.before(applicationOpeningDate) && currentDate.before(endOfDayClosing);
     }
 
+    // Helper to check if project is currently "active" as defined by FAQ
+    // Active: Visibility turned ON + Within application period
+    public boolean isActive(Date currentDate) {
+        return this.isVisible() && this.isApplicationPeriodActive(currentDate);
+    }
+
     // Helper to check if application period has passed
     public boolean isApplicationPeriodExpired(Date currentDate) {
          if (currentDate == null || applicationClosingDate == null) return false; // Cannot determine if null
          // Expired if current date is strictly after the closing date
-         return currentDate.after(applicationClosingDate);
+         // To match isApplicationPeriodActive, check against the day *after* closing date
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(applicationClosingDate);
+        cal.add(Calendar.DATE, 1); // Move to the day AFTER closing date
+        Date endOfDayClosing = cal.getTime();
+        return currentDate.after(endOfDayClosing); // Expired if current date is after the closing day ends
     }
 
 
@@ -450,6 +472,7 @@ class BTOApplication {
     private FlatType flatTypeApplied; // Can be null initially? No, should be set on creation.
     private ApplicationStatus status;
     private final Date applicationDate; // Track when applied
+    private ApplicationStatus statusBeforeWithdrawal; // Store the status before PENDING_WITHDRAWAL
 
     // Constructor for new application
     public BTOApplication(String applicantNric, String projectName, FlatType flatTypeApplied, Date applicationDate) {
@@ -462,6 +485,7 @@ class BTOApplication {
         this.flatTypeApplied = flatTypeApplied;
         this.status = ApplicationStatus.PENDING; // Default status for new applications
         this.applicationDate = applicationDate;
+        this.statusBeforeWithdrawal = null; // Initially null
     }
 
      // Constructor for loading from file (allows setting all fields)
@@ -469,10 +493,10 @@ class BTOApplication {
         if (applicationId == null || applicantNric == null || projectName == null || status == null || applicationDate == null) {
              throw new IllegalArgumentException("Required BTOApplication fields cannot be null when loading");
         }
-         // flatTypeApplied can be null if status is not BOOKED/SUCCESSFUL? Check CSV format.
-         // Assuming flatTypeApplied is stored even for PENDING/UNSUCCESSFUL.
-         if (flatTypeApplied == null && (status == ApplicationStatus.BOOKED || status == ApplicationStatus.SUCCESSFUL)) {
-              System.err.println("Warning: Loading BOOKED/SUCCESSFUL application ("+applicationId+") with null flatTypeApplied.");
+         // flatTypeApplied can be null if status is not BOOKED/SUCCESSFUL/PENDING_WITHDRAWAL? Check CSV format.
+         // Assuming flatTypeApplied is stored even for PENDING/UNSUCCESSFUL/WITHDRAWN.
+         if (flatTypeApplied == null && (status == ApplicationStatus.BOOKED || status == ApplicationStatus.SUCCESSFUL || status == ApplicationStatus.PENDING_WITHDRAWAL )) {
+              System.err.println("Warning: Loading " + status + " application ("+applicationId+") with null flatTypeApplied.");
          }
 
         this.applicationId = applicationId;
@@ -481,6 +505,11 @@ class BTOApplication {
         this.flatTypeApplied = flatTypeApplied;
         this.status = status;
         this.applicationDate = applicationDate;
+        this.statusBeforeWithdrawal = null; // Will be set during runtime if needed
+        // If loading PENDING_WITHDRAWAL, we lost the original status - need to handle this gracefully in manager logic
+        if (status == ApplicationStatus.PENDING_WITHDRAWAL) {
+            System.err.println("Warning: Application " + applicationId + " loaded with PENDING_WITHDRAWAL status. Original status before withdrawal is unknown. Reverting will assume PENDING/SUCCESSFUL based on flat type.");
+        }
     }
 
     // Getters
@@ -490,10 +519,19 @@ class BTOApplication {
     public FlatType getFlatTypeApplied() { return flatTypeApplied; }
     public ApplicationStatus getStatus() { return status; }
     public Date getApplicationDate() { return applicationDate; }
+    public ApplicationStatus getStatusBeforeWithdrawal() { return statusBeforeWithdrawal; }
 
     // Setter (primarily for status changes by Manager/Officer/System)
     public void setStatus(ApplicationStatus status) {
         if (status != null) {
+             // Store previous status if moving to PENDING_WITHDRAWAL
+            if (status == ApplicationStatus.PENDING_WITHDRAWAL && this.status != ApplicationStatus.PENDING_WITHDRAWAL) {
+                this.statusBeforeWithdrawal = this.status;
+            }
+            // Clear the stored status if moving *away* from PENDING_WITHDRAWAL
+            if (this.status == ApplicationStatus.PENDING_WITHDRAWAL && status != ApplicationStatus.PENDING_WITHDRAWAL) {
+                this.statusBeforeWithdrawal = null;
+            }
             this.status = status;
         }
     }
@@ -729,6 +767,7 @@ class DataService {
         "Type 2", "Number of units for Type 2", "Selling price for Type 2",
         "Application opening date", "Application closing date", "Manager", "Officer Slot", "Officer", "Visibility" // Added Visibility
     };
+    // NOTE: Application CSV does not store statusBeforeWithdrawal, it's transient state
     private static final String[] APPLICATION_HEADER = {"ApplicationID", "ApplicantNRIC", "ProjectName", "FlatTypeApplied", "Status", "ApplicationDate"};
     private static final String[] ENQUIRY_HEADER = {"EnquiryID", "ApplicantNRIC", "ProjectName", "EnquiryText", "ReplyText", "RepliedByNRIC", "EnquiryDate", "ReplyDate"};
     private static final String[] OFFICER_REGISTRATION_HEADER = {"RegistrationID", "OfficerNRIC", "ProjectName", "Status", "RegistrationDate"};
@@ -941,9 +980,13 @@ class DataService {
                      return;
                 }
                  // Validate flat type if status requires it
-                 if (flatType == null && (status == ApplicationStatus.BOOKED || status == ApplicationStatus.SUCCESSFUL)) {
+                 if (flatType == null && (status == ApplicationStatus.BOOKED || status == ApplicationStatus.SUCCESSFUL || status == ApplicationStatus.PENDING_WITHDRAWAL)) {
                      System.err.println("Warning: Application " + appId + " is " + status + " but has invalid/missing flat type '" + data[3] + "'. Status might be inconsistent.");
-                     // What to do? Skip? Load as is? Let's load as is but warn.
+                     // Load as is but warn.
+                 }
+                 if (status == ApplicationStatus.PENDING_WITHDRAWAL) {
+                      System.out.println("Info: Application " + appId + " loaded with PENDING_WITHDRAWAL status.");
+                      // Original status before withdrawal is lost on file load.
                  }
 
 
@@ -1102,10 +1145,11 @@ class DataService {
                  BTOApplication relevantApp = applications.values().stream()
                      .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
                      .max(Comparator.comparing(BTOApplication::getStatus, Comparator.comparingInt(s -> {
-                         // Define order of relevance: BOOKED > SUCCESSFUL > PENDING > WITHDRAWN > UNSUCCESSFUL
+                         // Define order of relevance: BOOKED > SUCCESSFUL > PENDING_WITHDRAWAL > PENDING > WITHDRAWN > UNSUCCESSFUL
                          switch (s) {
-                             case BOOKED: return 5;
-                             case SUCCESSFUL: return 4;
+                             case BOOKED: return 6;
+                             case SUCCESSFUL: return 5;
+                             case PENDING_WITHDRAWAL: return 4; // Higher relevance than PENDING
                              case PENDING: return 3;
                              case WITHDRAWN: return 2;
                              case UNSUCCESSFUL: return 1;
@@ -1116,11 +1160,11 @@ class DataService {
 
                  if (relevantApp != null) {
                      applicant.setAppliedProjectName(relevantApp.getProjectName());
-                     applicant.setApplicationStatus(relevantApp.getStatus());
+                     applicant.setApplicationStatus(relevantApp.getStatus()); // Set profile status to the most relevant app's status
                      if (relevantApp.getStatus() == ApplicationStatus.BOOKED) {
                          applicant.setBookedFlatType(relevantApp.getFlatTypeApplied());
                      } else {
-                         applicant.setBookedFlatType(null);
+                         applicant.setBookedFlatType(null); // Clear booked type if not currently BOOKED
                      }
                  } else {
                      // No applications found for this user, ensure state is clear
@@ -1301,7 +1345,7 @@ class DataService {
                     app.getProjectName(),
                     // Save enum name for flat type for robustness
                     app.getFlatTypeApplied() == null ? "" : app.getFlatTypeApplied().name(), // Save enum name or ""
-                    app.getStatus().name(),
+                    app.getStatus().name(), // Saves current status (e.g., PENDING_WITHDRAWAL)
                     formatDate(app.getApplicationDate())
                 });
             });
@@ -1636,10 +1680,12 @@ abstract class BaseController {
     protected Project getOfficerHandlingProject(HDBOfficer officer) {
         if (officer == null) return null;
         // Find the APPROVED registration for this officer
+        Date today = DataService.getCurrentDate();
         return officerRegistrations.values().stream()
             .filter(reg -> reg.getOfficerNric().equals(officer.getNric()) && reg.getStatus() == OfficerRegistrationStatus.APPROVED)
             .map(reg -> findProjectByName(reg.getProjectName())) // Find the corresponding project
             .filter(Objects::nonNull) // Ensure project exists
+            .filter(p -> p.isApplicationPeriodActive(today)) // Check if the project is currently active
             .findFirst() // An officer should only handle one at a time due to overlap rules
             .orElse(null);
     }
@@ -1651,6 +1697,7 @@ abstract class BaseController {
         }
         // Overlap exists if p1 starts before p2 ends AND p1 ends after p2 starts
         // Use !after and !before for inclusive start/end date checks
+        // Need to compare end of p1 vs start of p2, and start of p1 vs end of p2
         return !p1.getApplicationOpeningDate().after(p2.getApplicationClosingDate()) &&
                !p1.getApplicationClosingDate().before(p2.getApplicationOpeningDate());
     }
@@ -1688,12 +1735,15 @@ abstract class BaseController {
                 .filter(p -> {
                     if (!checkEligibility && !checkAvailability) return true; // Skip if checks not needed
 
+                    // Skip eligibility checks for Manager
+                    if (currentUser instanceof HDBManager) return true;
+
                     // Check if the current user is eligible for *at least one* flat type offered by the project
                     boolean eligibleForAnyType = p.getFlatTypes().keySet().stream()
                                                   .anyMatch(this::canApplyForFlatType); // Check basic eligibility (age/marital)
 
-                    if (checkEligibility && !eligibleForAnyType && !(currentUser instanceof HDBManager)) {
-                         // If checking eligibility and user isn't eligible for *any* type in project (and not manager)
+                    if (checkEligibility && !eligibleForAnyType) {
+                         // If checking eligibility and user isn't eligible for *any* type in project
                          return false;
                     }
 
@@ -1708,8 +1758,8 @@ abstract class BaseController {
                             return canApplyForFlatType(type) && details.getAvailableUnits() > 0;
                         });
 
-                    // If checking availability, must have at least one eligible type with units (unless manager)
-                    return eligibleAndAvailableExists || (currentUser instanceof HDBManager);
+                    // If checking availability, must have at least one eligible type with units
+                    return eligibleAndAvailableExists;
                 })
                 .sorted(Comparator.comparing(Project::getProjectName)) // Default sort by name
                 .collect(Collectors.toList());
@@ -1719,14 +1769,15 @@ abstract class BaseController {
     protected boolean isProjectVisibleToCurrentUser(Project project) {
         if (currentUser instanceof HDBManager) return true; // Managers see all
 
-        // Check if user has applied to this specific project (any non-final status)
+        // Check if user has applied to this specific project (any non-final or pending withdrawal status)
         boolean appliedToThis = false;
         if (currentUser instanceof Applicant) {
             Applicant appUser = (Applicant) currentUser;
             appliedToThis = project.getProjectName().equals(appUser.getAppliedProjectName()) &&
                             appUser.getApplicationStatus() != null &&
-                            appUser.getApplicationStatus() != ApplicationStatus.UNSUCCESSFUL &&
-                            appUser.getApplicationStatus() != ApplicationStatus.WITHDRAWN;
+                            appUser.getApplicationStatus() != ApplicationStatus.UNSUCCESSFUL && // Explicitly unsuccessful
+                            appUser.getApplicationStatus() != ApplicationStatus.WITHDRAWN;    // Explicitly withdrawn (after PENDING)
+            // PENDING_WITHDRAWAL should still allow viewing
         }
 
 
@@ -1741,7 +1792,7 @@ abstract class BaseController {
 
         // Project is visible if:
         // 1. Visibility toggle is ON OR
-        // 2. Visibility is OFF, BUT the user has an active application OR is the handling officer
+        // 2. Visibility is OFF, BUT the user has an application (not purely unsuccessful/withdrawn) OR is the handling officer
         return project.isVisible() || appliedToThis || isHandlingOfficer;
     }
 
@@ -1951,9 +2002,15 @@ class ApplicantController extends BaseController {
          }
         if (applicant.hasActiveApplication()) { // Checks for PENDING or SUCCESSFUL status
             System.out.println("You have an active application for project '" + applicant.getAppliedProjectName() + "' with status: " + applicant.getApplicationStatus());
-            System.out.println("You must withdraw or be unsuccessful before applying again.");
+            System.out.println("You must withdraw (and have it approved) or be unsuccessful before applying again.");
             return;
         }
+        if (applicant.hasPendingWithdrawal()) { // Check for pending withdrawal
+            System.out.println("You have a withdrawal request pending manager approval for project '" + applicant.getAppliedProjectName() + "'.");
+            System.out.println("You cannot apply for a new project until the withdrawal is processed.");
+            return;
+        }
+
 
         // 2. Find Eligible Projects Currently Open for Application
         System.out.println("\n--- Apply for BTO Project ---");
@@ -1999,7 +2056,7 @@ class ApplicantController extends BaseController {
         BTOApplication newApplication = new BTOApplication(currentUser.getNric(), selectedProject.getProjectName(), selectedFlatType, DataService.getCurrentDate());
         applications.put(newApplication.getApplicationId(), newApplication);
 
-        // Update applicant's state in the User object
+        // Update applicant's state in the User object immediately for UI feedback
         applicant.setAppliedProjectName(selectedProject.getProjectName());
         applicant.setApplicationStatus(ApplicationStatus.PENDING);
         applicant.setBookedFlatType(null); // Ensure booked type is cleared
@@ -2008,7 +2065,7 @@ class ApplicantController extends BaseController {
 
         // 7. Save relevant data
         DataService.saveApplications(applications);
-        // User state (appliedProjectName, status) is not saved in User CSV, it's derived from applications on load.
+        // User state (appliedProjectName, status) is synced from applications on load/access.
         // No need to save users here unless other profile info changed.
     }
 
@@ -2057,41 +2114,26 @@ class ApplicantController extends BaseController {
 
     public void viewMyApplication() {
         Applicant applicant = (Applicant) currentUser;
-        // Use the application map as the source of truth, find the most relevant one
-        BTOApplication application = applications.values().stream()
-             .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
-             .max(Comparator.comparing(BTOApplication::getStatus, Comparator.comparingInt(s -> {
-                 // Define order of relevance: BOOKED > SUCCESSFUL > PENDING > WITHDRAWN > UNSUCCESSFUL
-                 switch (s) {
-                     case BOOKED: return 5;
-                     case SUCCESSFUL: return 4;
-                     case PENDING: return 3;
-                     case WITHDRAWN: return 2;
-                     case UNSUCCESSFUL: return 1;
-                     default: return 0;
-                 }
-             })).thenComparing(BTOApplication::getApplicationDate).reversed()) // Newest first if status same
-             .orElse(null);
+        // Sync profile status before displaying (best practice)
+        DataService.synchronizeData(users, projects, applications, officerRegistrations); // Ensure profile is up-to-date
 
+        // Use the applicant's profile status as the primary source after sync
+        String projectName = applicant.getAppliedProjectName();
+        ApplicationStatus status = applicant.getApplicationStatus();
 
-        if (application == null) {
-            // Check if the applicant object thinks it has applied (sync issue?)
-            if (applicant.getAppliedProjectName() != null || applicant.getApplicationStatus() != null) {
-                 System.out.println("Your profile indicates an application, but the record could not be found or is outdated. Please contact support.");
-                 // Optionally clear local state: applicant.clearApplicationState();
-            } else {
-                System.out.println("You have not applied for any BTO project yet.");
-            }
+        if (projectName == null || status == null) {
+            System.out.println("You do not have any current or past BTO application records.");
             return;
         }
 
-        // Sync applicant object state just in case (should be done on load ideally)
-        applicant.setAppliedProjectName(application.getProjectName());
-        applicant.setApplicationStatus(application.getStatus());
-        applicant.setBookedFlatType(application.getStatus() == ApplicationStatus.BOOKED ? application.getFlatTypeApplied() : null);
+        // Find the specific application record for details (like date, flat type)
+        BTOApplication application = findApplicationByApplicantAndProject(applicant.getNric(), projectName);
+        if (application == null) {
+             System.out.println("Error: Your profile indicates an application, but the detailed record could not be found. Please contact support.");
+             return;
+        }
 
-        String projectName = application.getProjectName();
-        ApplicationStatus status = application.getStatus();
+
         Project project = findProjectByName(projectName); // Find project details
 
         System.out.println("\n--- Your BTO Application ---");
@@ -2102,7 +2144,7 @@ class ApplicantController extends BaseController {
             System.out.println("Neighborhood: (Project details not found)");
         }
         System.out.println("Flat Type Applied For: " + (application.getFlatTypeApplied() != null ? application.getFlatTypeApplied().getDisplayName() : "N/A"));
-        System.out.println("Application Status: " + status);
+        System.out.println("Application Status: " + status); // Display status from synced profile
          if (status == ApplicationStatus.BOOKED && applicant.getBookedFlatType() != null) {
              System.out.println("Booked Flat Type: " + applicant.getBookedFlatType().getDisplayName());
          }
@@ -2111,69 +2153,59 @@ class ApplicantController extends BaseController {
 
     public void requestWithdrawal() {
         Applicant applicant = (Applicant) currentUser;
-        // Find the application that is currently active (PENDING or SUCCESSFUL) or BOOKED
-         BTOApplication application = applications.values().stream()
-             .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
-             .filter(app -> app.getStatus() == ApplicationStatus.PENDING ||
-                            app.getStatus() == ApplicationStatus.SUCCESSFUL ||
-                            app.getStatus() == ApplicationStatus.BOOKED)
-             .findFirst() // Should only be one such application
-             .orElse(null);
+        // Sync profile status first
+        DataService.synchronizeData(users, projects, applications, officerRegistrations);
 
-        if (application == null) {
-            System.out.println("You do not have an active application (PENDING, SUCCESSFUL, or BOOKED) to withdraw.");
+        // Find the application based on the synced profile state
+        String currentProject = applicant.getAppliedProjectName();
+        ApplicationStatus currentStatus = applicant.getApplicationStatus();
+
+        if (currentProject == null || currentStatus == null) {
+             System.out.println("You do not have an application to withdraw.");
+             return;
+        }
+
+        // Check if eligible for withdrawal request (PENDING, SUCCESSFUL, BOOKED)
+        if (currentStatus != ApplicationStatus.PENDING &&
+            currentStatus != ApplicationStatus.SUCCESSFUL &&
+            currentStatus != ApplicationStatus.BOOKED) {
+            System.out.println("Your application status (" + currentStatus + ") is not eligible for withdrawal request.");
+            System.out.println("You can only request withdrawal if your status is PENDING, SUCCESSFUL, or BOOKED.");
             return;
         }
 
-        System.out.println("\n--- Withdraw Application ---");
+        // Find the application object
+        BTOApplication application = findApplicationByApplicantAndProject(applicant.getNric(), currentProject);
+        if (application == null) {
+             System.out.println("Error: Could not find the application record to request withdrawal. Please contact support.");
+             return;
+        }
+
+        System.out.println("\n--- Request Application Withdrawal ---");
         System.out.println("Project: " + application.getProjectName());
-        System.out.println("Current Status: " + application.getStatus());
-        System.out.print("Are you sure you want to withdraw this application? This action cannot be undone. (yes/no): ");
+        System.out.println("Current Status: " + currentStatus);
+        System.out.print("Are you sure you want to request withdrawal for this application? Manager approval is required. (yes/no): ");
         String confirm = scanner.nextLine().trim().toLowerCase();
 
         if (confirm.equals("yes")) {
-            ApplicationStatus previousStatus = application.getStatus();
-            FlatType previouslyBookedType = null;
+            // Update application status to PENDING_WITHDRAWAL
+            // The setStatus method now handles storing the previous status
+            application.setStatus(ApplicationStatus.PENDING_WITHDRAWAL);
 
-            // If status was BOOKED, need to release the unit
-            if (previousStatus == ApplicationStatus.BOOKED) {
-                 previouslyBookedType = application.getFlatTypeApplied();
-                 Project project = findProjectByName(application.getProjectName());
-                 if (project != null && previouslyBookedType != null) {
-                     FlatTypeDetails details = project.getMutableFlatTypeDetails(previouslyBookedType);
-                     if (details != null) {
-                         if (details.incrementAvailableUnits()) { // Put unit back
-                            System.out.println("Unit count for " + previouslyBookedType.getDisplayName() + " in project " + project.getProjectName() + " incremented.");
-                            // Save projects because unit count changed
-                            DataService.saveProjects(projects);
-                         } else {
-                             System.err.println("Error: Failed to increment available units during withdrawal (already at max?).");
-                         }
-                     } else {
-                          System.err.println("Error: Could not find flat type details to increment units during withdrawal.");
-                     }
-                 } else {
-                      System.err.println("Error: Could not find project details to increment units during withdrawal.");
-                 }
-            }
+            // Update applicant's profile status immediately for UI consistency
+            applicant.setApplicationStatus(ApplicationStatus.PENDING_WITHDRAWAL);
+            // DO NOT clear booked flat type or release unit here - Manager handles on approval
 
-            // Update application status
-            application.setStatus(ApplicationStatus.WITHDRAWN);
-
-            // Update applicant's state in User object
-            applicant.setApplicationStatus(ApplicationStatus.WITHDRAWN);
-            applicant.setBookedFlatType(null); // Clear booked type if any
-            // Keep appliedProjectName? Or clear? Let's keep it for history, hasActiveApplication() handles the logic.
-            // applicant.clearApplicationState(); // Use this if we want to fully reset
-
-            System.out.println("Application withdrawn successfully.");
+            System.out.println("Withdrawal request submitted successfully.");
+            System.out.println("Your application status is now PENDING_WITHDRAWAL and requires Manager approval.");
 
             // Save application data
             DataService.saveApplications(applications);
-            // User state derived on load, no need to save users unless profile changed
+            // No need to save projects (unit not released yet)
+            // User profile is synced on load/access
 
         } else {
-            System.out.println("Withdrawal cancelled.");
+            System.out.println("Withdrawal request cancelled.");
         }
     }
 
@@ -2355,12 +2387,19 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
     public void registerForProject() {
         HDBOfficer officer = (HDBOfficer) currentUser; // Safe cast
         Date currentDate = DataService.getCurrentDate();
+        // Sync profile before checks
+        DataService.synchronizeData(users, projects, applications, officerRegistrations);
 
-        // 1. Check Eligibility: Cannot register if has active BTO application
-        if (officer.hasActiveApplication()) { // hasActiveApplication checks for PENDING/SUCCESSFUL
+        // 1. Check Eligibility: Cannot register if has active BTO application or pending withdrawal
+        if (officer.hasActiveApplication()) {
             System.out.println("Error: Cannot register to handle a project while you have an active BTO application (" + officer.getAppliedProjectName() + ", Status: " + officer.getApplicationStatus() + ").");
             return;
         }
+        if (officer.hasPendingWithdrawal()) {
+            System.out.println("Error: Cannot register to handle a project while you have a pending withdrawal request.");
+            return;
+        }
+
 
         // 2. Find Projects Available for Registration
         System.out.println("\n--- Register to Handle Project ---");
@@ -2377,7 +2416,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
 
 
         List<Project> availableProjects = projects.stream()
-                // Basic criteria: Has slots, officer not already approved/pending for *this* project, project not expired
+                // Basic criteria: Has slots, officer not already registered for *this* project, project not expired
                 .filter(p -> p.getRemainingOfficerSlots() > 0)
                 .filter(p -> !p.isApplicationPeriodExpired(currentDate)) // Check not expired
                 .filter(p -> officerRegistrations.values().stream() // Check not already registered (any status) for this project
@@ -2388,7 +2427,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
                 // Conflict Check 2: Cannot register if pending for another project with overlapping dates
                 .filter(p -> pendingRegistrationProjects.stream()
                                 .noneMatch(pendingProject -> checkDateOverlap(p, pendingProject)))
-                // Conflict Check 3: Cannot register for a project they have *ever* applied for (any status)
+                // Conflict Check 3: Cannot register for a project they have *ever* applied for (any status, including PENDING_WITHDRAWAL etc.)
                  .filter(p -> applications.values().stream()
                                 .noneMatch(app -> app.getApplicantNric().equals(officer.getNric()) &&
                                                   app.getProjectName().equals(p.getProjectName())))
@@ -2399,7 +2438,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
             System.out.println("No projects currently available for you to register for based on eligibility criteria:");
             System.out.println("- Project must have open officer slots and not be expired.");
             System.out.println("- You must not already have a registration (Pending/Approved/Rejected) for the project.");
-            System.out.println("- You cannot have an active BTO application (Pending/Successful).");
+            System.out.println("- You cannot have an active BTO application (Pending/Successful) or Pending Withdrawal.");
             System.out.println("- You cannot register if the project's dates overlap with a project you are already handling or have a pending registration for.");
              System.out.println("- You cannot register for a project you have previously applied for.");
             return;
@@ -2654,7 +2693,7 @@ class OfficerController extends ApplicantController { // Inherits Applicant acti
             // 2. Update application status
             applicationToBook.setStatus(ApplicationStatus.BOOKED);
 
-            // 3. Update applicant profile (user object)
+            // 3. Update applicant profile (user object) - Sync will handle this, but update for immediate feedback
             applicant.setApplicationStatus(ApplicationStatus.BOOKED);
             applicant.setBookedFlatType(appliedFlatType); // Set the booked type
 
@@ -2716,7 +2755,7 @@ class ManagerController extends BaseController {
         HDBManager manager = (HDBManager) currentUser; // Safe cast
 
         // Requirement 18: "System prevents assigning more than one project to a manager within the same application dates"
-        // Check the proposed dates against *all* existing projects managed by this manager for *any* overlap.
+        // Clarification: Check against *active* projects (Visible + Within App Period) managed by this manager.
 
         System.out.println("\n--- Create New BTO Project ---");
 
@@ -2763,9 +2802,10 @@ class ManagerController extends BaseController {
             return;
         }
 
-        // 4. Get Dates and Validate Overlap
+        // 4. Get Dates and Validate Overlap (against *active* projects)
         Date openingDate;
         Date closingDate;
+        Date currentDate = DataService.getCurrentDate();
         while (true) {
             openingDate = getDateInput("Enter Application Opening Date (yyyy-MM-dd): ", false);
             closingDate = getDateInput("Enter Application Closing Date (yyyy-MM-dd): ", false);
@@ -2781,18 +2821,19 @@ class ManagerController extends BaseController {
 
             // Create a temporary project object with the proposed dates for overlap check
             Project proposedProjectDates = new Project(
-                "__temp__", "__temp__", flatTypes, openingDate, closingDate, manager.getNric(), 0, null, false
+                "__temp__", "__temp__", flatTypes, openingDate, closingDate, manager.getNric(), 0, null, true // Assume visible for check
             );
 
-            // Check for overlap with existing managed projects
-            boolean overlaps = projects.stream()
-                .filter(p -> p.getManagerNric().equals(manager.getNric()))
-                .anyMatch(existingProject -> checkDateOverlap(proposedProjectDates, existingProject));
+            // Check for overlap ONLY with existing *active* managed projects (Visible AND within App Period)
+            boolean overlapsWithActive = projects.stream()
+                .filter(p -> p.getManagerNric().equals(manager.getNric())) // Managed by this manager
+                .filter(p -> p.isActive(currentDate)) // Is currently active (Visible + In App Period)
+                .anyMatch(existingActiveProject -> checkDateOverlap(proposedProjectDates, existingActiveProject));
 
-            if (overlaps) {
-                 System.out.println("Error: The specified application period overlaps with another project you manage. Please enter different dates.");
+            if (overlapsWithActive) {
+                 System.out.println("Error: The specified application period overlaps with another *active* project (Visible & Within App Period) you manage. Please enter different dates or manage the visibility/dates of the existing project.");
             } else {
-                break; // Dates are valid and non-overlapping
+                break; // Dates are valid and non-overlapping with active projects
             }
         }
 
@@ -2862,7 +2903,7 @@ class ManagerController extends BaseController {
         projectToEdit.setFlatTypes(newFlatTypesMap); // Set the modified map back
 
 
-        // Edit Dates (Validate non-overlap with other projects if changed)
+        // Edit Dates (Validate non-overlap with other *active* projects if changed)
         Date originalOpening = projectToEdit.getApplicationOpeningDate();
         Date originalClosing = projectToEdit.getApplicationClosingDate();
         Date newOpeningDate = getDateInput("Enter new Opening Date (yyyy-MM-dd) [" + DataService.formatDate(originalOpening) + "] (leave blank to keep): ", true);
@@ -2871,6 +2912,7 @@ class ManagerController extends BaseController {
         // Use new dates if provided, otherwise stick to originals
         Date finalOpening = (newOpeningDate != null) ? newOpeningDate : originalOpening;
         Date finalClosing = (newClosingDate != null) ? newClosingDate : originalClosing;
+        Date currentDate = DataService.getCurrentDate();
 
         boolean datesChanged = (newOpeningDate != null || newClosingDate != null);
         boolean datesValid = true;
@@ -2880,21 +2922,22 @@ class ManagerController extends BaseController {
              datesValid = false;
         }
 
-        // If dates changed, re-check overlap, excluding the project being edited itself
+        // If dates changed, re-check overlap, excluding the project being edited itself, against other *active* projects
         if (datesChanged && datesValid) {
              // Create a temporary project object with the proposed dates for overlap check
              Project proposedProjectDates = new Project(
                  projectToEdit.getProjectName(), projectToEdit.getNeighborhood(), projectToEdit.getFlatTypes(),
                  finalOpening, finalClosing, projectToEdit.getManagerNric(), projectToEdit.getMaxOfficerSlots(),
-                 projectToEdit.getApprovedOfficerNrics(), projectToEdit.isVisible()
+                 projectToEdit.getApprovedOfficerNrics(), projectToEdit.isVisible() // Use current visibility
              );
 
-             boolean overlaps = projects.stream()
+             boolean overlapsWithActive = projects.stream()
                 .filter(p -> p.getManagerNric().equals(currentUser.getNric()) && !p.equals(projectToEdit)) // Exclude self
-                .anyMatch(existingProject -> checkDateOverlap(proposedProjectDates, existingProject));
+                .filter(p -> p.isActive(currentDate)) // Is currently active
+                .anyMatch(existingActiveProject -> checkDateOverlap(proposedProjectDates, existingActiveProject));
 
-             if (overlaps) {
-                 System.out.println("Error: The new application period overlaps with another project you manage. Dates not updated.");
+             if (overlapsWithActive) {
+                 System.out.println("Error: The new application period overlaps with another *active* project you manage. Dates not updated.");
                  datesValid = false;
              }
         }
@@ -2948,7 +2991,8 @@ class ManagerController extends BaseController {
             .anyMatch(app -> app.getProjectName().equals(projectToDelete.getProjectName()) &&
                              (app.getStatus() == ApplicationStatus.PENDING ||
                               app.getStatus() == ApplicationStatus.SUCCESSFUL ||
-                              app.getStatus() == ApplicationStatus.BOOKED)); // Check active statuses
+                              app.getStatus() == ApplicationStatus.BOOKED ||
+                              app.getStatus() == ApplicationStatus.PENDING_WITHDRAWAL)); // Check active statuses including pending withdrawal
 
         boolean hasActiveRegistrations = officerRegistrations.values().stream()
             .anyMatch(reg -> reg.getProjectName().equals(projectToDelete.getProjectName()) &&
@@ -2957,7 +3001,7 @@ class ManagerController extends BaseController {
 
         if (hasActiveApplications || hasActiveRegistrations) {
             System.out.println("Error: Cannot delete project '" + projectToDelete.getProjectName() + "'.");
-            if (hasActiveApplications) System.out.println("- It has active BTO applications (Pending/Successful/Booked).");
+            if (hasActiveApplications) System.out.println("- It has active BTO applications (Pending/Successful/Booked/PendingWithdrawal).");
             if (hasActiveRegistrations) System.out.println("- It has active Officer registrations (Pending/Approved).");
             System.out.println("Resolve these associations before deleting.");
             return; // Prevent deletion
@@ -3039,7 +3083,8 @@ class ManagerController extends BaseController {
           if (managed.isEmpty() && applyUserFilters) {
             System.out.println("You are not managing any projects" + (filterLocation != null || filterFlatType != null ? " matching the current filters." : "."));
           } else if (managed.isEmpty() && !applyUserFilters) {
-              System.out.println("You are not managing any projects.");
+              // Don't print message here, let caller handle it if needed
+              // System.out.println("You are not managing any projects.");
           }
           return managed;
     }
@@ -3251,13 +3296,12 @@ class ManagerController extends BaseController {
                          if (details == null) {
                               System.out.println("Error: Applied flat type (" + appliedType.getDisplayName() + ") does not exist in this project. Rejecting application.");
                               appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
-                              applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
+                              applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL); // Update user state
                               DataService.saveApplications(applications);
                               return;
                          }
 
                          // Check 2: Are there *any* available units left for booking? (Officer handles actual decrement)
-                         // Manager approval just gates entry to the 'SUCCESSFUL' pool.
                          // Requirement: "approval is limited to the supply of the flats"
                          // Interpretation: Manager should not approve more applications than total units exist for that type.
                          long alreadySuccessfulOrBookedCount = applications.values().stream()
@@ -3277,15 +3321,12 @@ class ManagerController extends BaseController {
                          } else {
                              System.out.println("Cannot approve. The number of successful/booked applications already meets or exceeds the total supply (" + details.getTotalUnits() + ") for " + appliedType.getDisplayName() + ".");
                              // Optionally, auto-reject? Or leave pending? Let's leave pending.
-                             // appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
-                             // applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
-                             // DataService.saveApplications(applications);
                          }
                      } else if (action.equals("R")) {
                          // Reject: Change status in application and user object
                          appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
                          applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL); // Update user state
-                         // applicant.clearApplicationState(); // Optionally clear profile state fully
+                         applicant.setBookedFlatType(null); // Ensure booked type is clear
                          System.out.println("Application Rejected (Status: UNSUCCESSFUL).");
                          // Save changes
                          DataService.saveApplications(applications);
@@ -3304,7 +3345,7 @@ class ManagerController extends BaseController {
          // Display other statuses for info
          System.out.println("\n--- Other Application Statuses ---");
          projectApplications.stream()
-             .filter(app -> app.getStatus() != ApplicationStatus.PENDING)
+             .filter(app -> app.getStatus() != ApplicationStatus.PENDING) // Show all non-pending
              .forEach(app -> {
                  User applicant = users.get(app.getApplicantNric());
                  System.out.printf("- NRIC: %s | Name: %-15s | Type: %-8s | Status: %s\n",
@@ -3315,8 +3356,162 @@ class ManagerController extends BaseController {
              });
     }
 
-     // Withdrawal is handled by ApplicantController and is auto-approved for simplicity.
-     // If manager approval was required, this method would list applications marked for withdrawal.
+     // Method for Manager to approve/reject withdrawal requests
+     public void manageWithdrawalRequests() {
+        System.out.println("\n--- Manage Withdrawal Requests ---");
+        List<Project> myProjects = getManagedProjects(false);
+        if (myProjects.isEmpty()) {
+             System.out.println("You are not managing any projects.");
+             return;
+        }
+        List<String> myProjectNames = myProjects.stream().map(Project::getProjectName).collect(Collectors.toList());
+
+        // Find applications with PENDING_WITHDRAWAL status for projects managed by this manager
+        List<BTOApplication> pendingWithdrawals = applications.values().stream()
+            .filter(app -> app.getStatus() == ApplicationStatus.PENDING_WITHDRAWAL)
+            .filter(app -> myProjectNames.contains(app.getProjectName())) // Only for managed projects
+            .sorted(Comparator.comparing(BTOApplication::getApplicationDate))
+            .collect(Collectors.toList());
+
+        if (pendingWithdrawals.isEmpty()) {
+            System.out.println("No pending withdrawal requests found for the projects you manage.");
+            return;
+        }
+
+        System.out.println("--- Pending Withdrawal Requests ---");
+        for (int i = 0; i < pendingWithdrawals.size(); i++) {
+            BTOApplication app = pendingWithdrawals.get(i);
+            User applicantUser = users.get(app.getApplicantNric());
+
+            // Determine status before withdrawal request
+            ApplicationStatus statusBefore = app.getStatusBeforeWithdrawal();
+            if (statusBefore == null) { // Infer if not stored (e.g., loaded from old file)
+                statusBefore = inferStatusBeforeWithdrawal(app, (applicantUser instanceof Applicant) ? (Applicant)applicantUser : null);
+                System.out.print(" (Inferred Original: " + statusBefore + ")");
+            } else {
+                 System.out.print(" (Original: " + statusBefore + ")");
+            }
+
+            System.out.printf("\n%d. NRIC: %s | Name: %-15s | Project: %-15s | Type: %-8s | App Date: %s",
+                    i + 1,
+                    app.getApplicantNric(),
+                    applicantUser != null ? applicantUser.getName() : "N/A",
+                    app.getProjectName(),
+                    app.getFlatTypeApplied() != null ? app.getFlatTypeApplied().getDisplayName() : "N/A",
+                    DataService.formatDate(app.getApplicationDate()));
+            System.out.println(); // Newline for formatting
+        }
+
+        System.out.print("Enter number to Approve/Reject withdrawal (or 0 to skip): ");
+        try {
+            int choice = Integer.parseInt(scanner.nextLine());
+            if (choice >= 1 && choice <= pendingWithdrawals.size()) {
+                BTOApplication appToProcess = pendingWithdrawals.get(choice - 1);
+                User applicantUser = users.get(appToProcess.getApplicantNric());
+                 if (!(applicantUser instanceof Applicant)) {
+                    System.out.println("Error: Applicant data not found or invalid for NRIC " + appToProcess.getApplicantNric() + ". Cannot process withdrawal.");
+                    return;
+                 }
+                Applicant applicant = (Applicant) applicantUser;
+                Project project = findProjectByName(appToProcess.getProjectName());
+                 if (project == null) {
+                     System.out.println("Error: Project data not found for application " + appToProcess.getApplicationId() + ". Cannot process withdrawal.");
+                     return;
+                 }
+
+                // Determine original status more reliably
+                ApplicationStatus originalStatus = appToProcess.getStatusBeforeWithdrawal();
+                if (originalStatus == null) {
+                    originalStatus = inferStatusBeforeWithdrawal(appToProcess, applicant);
+                }
+
+
+                System.out.print("Approve or Reject withdrawal request? (A/R): ");
+                String action = scanner.nextLine().trim().toUpperCase();
+
+                if (action.equals("A")) { // APPROVE Withdrawal
+                    ApplicationStatus finalStatus;
+                    boolean releasedUnit = false;
+
+                    // Determine final status based on original status (as per FAQ Q4/Q2)
+                    if (originalStatus == ApplicationStatus.BOOKED) {
+                        finalStatus = ApplicationStatus.UNSUCCESSFUL;
+                        // Release the booked unit
+                        FlatType bookedType = appToProcess.getFlatTypeApplied(); // Use type from application
+                        if (bookedType != null) {
+                             FlatTypeDetails details = project.getMutableFlatTypeDetails(bookedType);
+                             if (details != null) {
+                                 if (details.incrementAvailableUnits()) {
+                                     releasedUnit = true;
+                                     System.out.println("Unit for " + bookedType.getDisplayName() + " released back to project " + project.getProjectName());
+                                 } else {
+                                      System.err.println("Error: Could not increment available units for " + bookedType + " during withdrawal approval.");
+                                 }
+                             } else {
+                                 System.err.println("Error: Could not find flat details for " + bookedType + " during withdrawal approval.");
+                             }
+                        } else {
+                             System.err.println("Error: Cannot determine booked flat type to release unit during withdrawal approval.");
+                        }
+                    } else if (originalStatus == ApplicationStatus.SUCCESSFUL) {
+                        finalStatus = ApplicationStatus.UNSUCCESSFUL;
+                    } else { // Assumed PENDING originally
+                        finalStatus = ApplicationStatus.WITHDRAWN;
+                    }
+
+                    // Update application and applicant profile
+                    appToProcess.setStatus(finalStatus);
+                    applicant.setApplicationStatus(finalStatus);
+                    applicant.setBookedFlatType(null); // Always clear booked type on withdrawal approval
+
+                    System.out.println("Withdrawal request Approved. Application status set to " + finalStatus + ".");
+
+                    // Save relevant data
+                    DataService.saveApplications(applications);
+                    if (releasedUnit) {
+                        DataService.saveProjects(projects); // Save if unit count changed
+                    }
+                    // User profile state updated in memory, will be synced on next access/load
+
+                } else if (action.equals("R")) { // REJECT Withdrawal
+                    // Revert application status to its state before withdrawal request
+                    appToProcess.setStatus(originalStatus);
+                    applicant.setApplicationStatus(originalStatus); // Revert profile status too
+                    // Note: BookedFlatType remains as it was in the profile.
+
+                    System.out.println("Withdrawal request Rejected. Application status reverted to " + originalStatus + ".");
+                    // Save application data
+                    DataService.saveApplications(applications);
+
+                } else {
+                    System.out.println("Invalid action.");
+                }
+            } else if (choice != 0) {
+                System.out.println("Invalid choice.");
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid input.");
+        }
+     }
+
+     // Helper to infer status before withdrawal if not explicitly stored
+     private ApplicationStatus inferStatusBeforeWithdrawal(BTOApplication app, Applicant applicant) {
+         // This is an estimation, less reliable than storing the actual previous status
+         if (applicant != null && applicant.hasBooked() && app.getFlatTypeApplied() != null) {
+            return ApplicationStatus.BOOKED;
+         } else if (app.getFlatTypeApplied() != null) {
+             // If flat type is known, it must have at least reached PENDING or SUCCESSFUL
+             // Check if applicant profile *currently* reflects SUCCESSFUL (less likely if PENDING_WITHDRAWAL is shown, but fallback)
+             if (applicant != null && applicant.getApplicationStatus() == ApplicationStatus.SUCCESSFUL) {
+                 return ApplicationStatus.SUCCESSFUL;
+             } else {
+                 // Cannot definitively distinguish between PENDING and SUCCESSFUL without more info
+                 // Defaulting to SUCCESSFUL if flat type exists, otherwise PENDING
+                 return ApplicationStatus.SUCCESSFUL;
+             }
+         }
+         return ApplicationStatus.PENDING; // Default assumption if no other info
+     }
 
 
     public void generateApplicantReport() {
@@ -3642,7 +3837,7 @@ class ApplicantView extends BaseView {
             System.out.println("1. View Available BTO Projects");
             System.out.println("2. Apply for BTO Project");
             System.out.println("3. View My Application Status");
-            System.out.println("4. Withdraw Application");
+            System.out.println("4. Request Application Withdrawal"); // Changed wording
             System.out.println("5. Submit Enquiry");
             System.out.println("6. View My Enquiries");
             System.out.println("7. Edit My Enquiry");
@@ -3658,7 +3853,7 @@ class ApplicantView extends BaseView {
                 case 1: applicantController.viewOpenProjects(); break;
                 case 2: applicantController.applyForProject(); break;
                 case 3: applicantController.viewMyApplication(); break;
-                case 4: applicantController.requestWithdrawal(); break;
+                case 4: applicantController.requestWithdrawal(); break; // Now requests, doesn't directly withdraw
                 case 5: applicantController.submitEnquiry(); break;
                 case 6: applicantController.viewMyEnquiries(); break;
                 case 7: applicantController.editMyEnquiry(); break;
@@ -3713,7 +3908,7 @@ class OfficerView extends BaseView {
             System.out.println(" 6. View Available BTO Projects");
             System.out.println(" 7. Apply for BTO Project");
             System.out.println(" 8. View My Application Status");
-            System.out.println(" 9. Withdraw Application");
+            System.out.println(" 9. Request Application Withdrawal"); // Changed wording
             System.out.println("10. Submit Enquiry");
             System.out.println("11. View My Enquiries");
             System.out.println("12. Edit My Enquiry");
@@ -3737,7 +3932,7 @@ class OfficerView extends BaseView {
                 case 6: officerController.viewOpenProjects(); break;
                 case 7: officerController.applyForProject(); break;
                 case 8: officerController.viewMyApplication(); break;
-                case 9: officerController.requestWithdrawal(); break;
+                case 9: officerController.requestWithdrawal(); break; // Now requests
                 case 10: officerController.submitEnquiry(); break;
                 case 11: officerController.viewMyEnquiries(); break;
                 case 12: officerController.editMyEnquiry(); break;
@@ -3786,18 +3981,18 @@ class ManagerView extends BaseView {
             System.out.println("--- Staff & Application Management ---");
             System.out.println(" 7. Manage Officer Registrations (Approve/Reject)");
             System.out.println(" 8. Manage BTO Applications (Approve/Reject)");
-            // Withdrawal managed by applicant
+            System.out.println(" 9. Manage Withdrawal Requests (Approve/Reject)"); // Added
             System.out.println("--- Reporting & Enquiries ---");
-            System.out.println(" 9. Generate Applicant Report (Booked Flats)");
-            System.out.println("10. View Enquiries (ALL Projects)");
-            System.out.println("11. View/Reply Enquiries (My Managed Projects)");
+            System.out.println("10. Generate Applicant Report (Booked Flats)");
+            System.out.println("11. View Enquiries (ALL Projects)");
+            System.out.println("12. View/Reply Enquiries (My Managed Projects)");
             System.out.println("--- Common Actions ---");
-            System.out.println("12. Apply/Clear Project Filters (Affects Views 5, 6, 9, 11)");
-            System.out.println("13. Change Password");
+            System.out.println("13. Apply/Clear Project Filters (Affects Views 5, 6, 10, 12)"); // Updated range
+            System.out.println("14. Change Password");
             System.out.println(" 0. Logout");
             System.out.println("========================================");
 
-            int choice = getMenuChoice(0, 13);
+            int choice = getMenuChoice(0, 14); // Updated max choice
 
             switch (choice) {
                 // Project Management
@@ -3810,13 +4005,14 @@ class ManagerView extends BaseView {
                 // Staff & Application Management
                 case 7: managerController.manageOfficerRegistrations(); break;
                 case 8: managerController.manageApplications(); break;
+                case 9: managerController.manageWithdrawalRequests(); break; // Added call
                 // Reporting & Enquiries
-                case 9: managerController.generateApplicantReport(); break;
-                case 10: managerController.viewAllEnquiries(); break;
-                case 11: managerController.viewAndReplyToManagedEnquiries(); break;
+                case 10: managerController.generateApplicantReport(); break;
+                case 11: managerController.viewAllEnquiries(); break;
+                case 12: managerController.viewAndReplyToManagedEnquiries(); break;
                 // Common Actions
-                case 12: applyFilters(); break;
-                case 13:
+                case 13: applyFilters(); break;
+                case 14:
                     if (changePassword()) {
                         logout = true;
                     }
@@ -3878,6 +4074,13 @@ public class BTOApp {
     public void run() {
         User currentUser = null;
         while (true) { // Keep running until explicitly shutdown
+            // Run sync before login screen to ensure applicant profiles are up-to-date
+             if (this.users != null && this.projects != null && this.applications != null && this.officerRegistrations != null) {
+                DataService.synchronizeData(users, projects, applications, officerRegistrations);
+             } else {
+                  System.err.println("Warning: Data not fully loaded, skipping pre-login sync.");
+             }
+
             currentUser = loginScreen(); // Attempt login
             if (currentUser != null) {
                 showRoleMenu(currentUser); // Show menu for logged-in user
@@ -3955,6 +4158,7 @@ public class BTOApp {
         if (scanner != null) {
             try {
                 scanner.close();
+                 System.out.println("Scanner closed.");
             } catch (IllegalStateException e) {
                 // Ignore if already closed
             }
@@ -3968,10 +4172,8 @@ public class BTOApp {
         try {
             // Add shutdown hook *before* initialization, so it's always registered
             // This hook runs in a separate thread.
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nShutdown hook triggered...");
-                app.shutdown(); // Call the shutdown method which saves data and closes scanner
-            }));
+            Runtime.getRuntime().addShutdownHook(new Thread(app::shutdown, "Shutdown-Thread")); // Use method reference
+
 
             app.initialize();
 
@@ -3982,9 +4184,11 @@ public class BTOApp {
              System.err.println("An unexpected critical error occurred in the main application thread: " + e.getMessage());
              e.printStackTrace();
              // Shutdown hook will attempt to save data and close resources.
-             // No need to call app.shutdown() explicitly here as the hook will run on JVM exit.
+             // Explicit System.exit might be needed if the main thread error prevents normal exit
+             // System.exit(1); // Uncomment if needed to ensure shutdown hook runs
         }
         // Normal exit after run() loop finishes (e.g., user chooses not to retry login)
-        // Shutdown hook will still run here.
+        // Shutdown hook will still run here. If run() finished normally, exit code is 0.
+         System.exit(0); // Ensure JVM terminates and runs shutdown hook
     }
 }
