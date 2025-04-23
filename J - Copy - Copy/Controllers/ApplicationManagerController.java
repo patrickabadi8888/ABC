@@ -1,10 +1,3 @@
-/**
- * Controller handling actions performed by an HDB Manager related to managing
- * BTO applications submitted for the projects they manage (Approving or Rejecting PENDING applications).
- * Inherits common functionality from BaseController.
- *
- * @author Jordon
- */
 package Controllers;
 
 import java.util.Comparator;
@@ -28,22 +21,6 @@ import Services.IUserService;
 import Utils.DateUtils;
 
 public class ApplicationManagerController extends BaseController {
-    /**
-     * Constructs a new ApplicationManagerController.
-     * Ensures the current user is an HDBManager.
-     *
-     * @param userService                Service for user data access.
-     * @param projectService             Service for project data access.
-     * @param applicationService         Service for application data access.
-     * @param officerRegistrationService Service for officer registration data
-     *                                   access.
-     * @param enquiryService             Service for enquiry data access.
-     * @param currentUser                The currently logged-in User (must be
-     *                                   HDBManager).
-     * @param scanner                    Scanner instance for reading user input.
-     * @param authController             Controller for authentication tasks.
-     * @throws IllegalArgumentException if the currentUser is not an HDBManager.
-     */
     public ApplicationManagerController(IUserService userService, IProjectService projectService,
             IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
             IEnquiryService enquiryService,
@@ -55,29 +32,6 @@ public class ApplicationManagerController extends BaseController {
         }
     }
 
-    /**
-     * Guides the HDB Manager through approving or rejecting pending BTO
-     * applications for a selected managed project.
-     * - Displays a list of projects managed by the current manager for selection.
-     * - Retrieves and displays PENDING applications for the selected project.
-     * - Prompts the manager to select a pending application to process.
-     * - Validates that the applicant data is available.
-     * - Prompts for Approve (A) or Reject (R) action.
-     * - If Approve:
-     * - Checks if the application has a valid flat type specified.
-     * - Checks if approving this application would exceed the total units available
-     * for that flat type (considering already SUCCESSFUL or BOOKED applications).
-     * - If checks pass, updates the application status and the applicant's profile
-     * status to SUCCESSFUL, then saves the application data.
-     * - If checks fail (e.g., no units left), informs the manager and does not
-     * approve.
-     * - If Reject:
-     * - Updates the application status and the applicant's profile status to
-     * UNSUCCESSFUL, clears booked flat type on profile, then saves the application
-     * data.
-     * - Displays a summary of applications with other statuses (Successful, Booked,
-     * etc.) for the project.
-     */
     public void manageApplications() {
         System.out.println("\n--- Manage BTO Applications ---");
         List<Project> myProjects = projectService.getProjectsManagedBy(currentUser.getNric())
