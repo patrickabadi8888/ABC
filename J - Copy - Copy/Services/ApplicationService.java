@@ -1,3 +1,12 @@
+/**
+ * Service implementation for managing BTO Application data.
+ * Handles loading application data from applications.csv, adjusting project unit availability based on
+ * booked applications, and saving applications back. Provides methods for finding, retrieving,
+ * adding, and removing applications.
+ *
+ * @author Jordon
+ */
+
 package Services;
 
 import java.io.File;
@@ -26,13 +35,30 @@ public class ApplicationService implements IApplicationService {
 
     private Map<String, BTOApplication> applications;
 
+    /**
+     * Constructs a new ApplicationService. Initializes the internal application
+     * map.
+     */
     public ApplicationService() {
         this.applications = new HashMap<>();
     }
 
+    /**
+     * Loads BTO application data from applications.csv.
+     * Validates application IDs (uniqueness), dates, and enum values.
+     * Tracks applications with 'BOOKED' status and adjusts the `availableUnits` in
+     * the corresponding
+     * Project's FlatTypeDetails objects provided in the `projects` list.
+     * Populates the internal application map.
+     *
+     * @param projects A list of all Project objects, used for finding projects and
+     *                 adjusting their unit counts.
+     * @return A copy of the map containing all loaded applications (ApplicationID
+     *         to BTOApplication object).
+     */
     @Override
     public Map<String, BTOApplication> loadApplications(List<Project> projects) {
-        this.applications.clear(); // Clear before loading
+        this.applications.clear();
         Map<Project, Map<FlatType, Integer>> bookedCounts = new HashMap<>();
 
         CsvRW.readCsv(APPLICATION_FILE, APPLICATION_HEADER.length).forEach(data -> {
@@ -58,16 +84,11 @@ public class ApplicationService implements IApplicationService {
                     System.err.println("Warning: Application " + appId + " is " + status
                             + " but has invalid/missing flat type '" + data[3] + "'. Status might be inconsistent.");
                 }
-                if (status == ApplicationStatus.PENDING_WITHDRAWAL) {
-                     // We can load it, but original status isn't stored persistently in this design
-                     // The BTOApplication constructor warns about this.
-                }
 
                 BTOApplication application = new BTOApplication(appId, applicantNric, projectName, flatType, status,
                         appDate);
                 this.applications.put(application.getApplicationId(), application);
 
-                // Track booked counts to adjust project units later
                 if (status == ApplicationStatus.BOOKED && flatType != null) {
                     Project project = projects.stream()
                             .filter(p -> p.getProjectName().equalsIgnoreCase(projectName))
@@ -90,14 +111,13 @@ public class ApplicationService implements IApplicationService {
             }
         });
 
-        // Adjust available units in Project objects based on loaded booked applications
         bookedCounts.forEach((project, typeCounts) -> {
             typeCounts.forEach((type, count) -> {
-                FlatTypeDetails details = project.getMutableFlatTypeDetails(type); // Use mutable getter
+                FlatTypeDetails details = project.getMutableFlatTypeDetails(type);
                 if (details != null) {
-                    int initialAvailable = details.getTotalUnits(); // Assume file loads total, derive available
+                    int initialAvailable = details.getTotalUnits();
                     int finalAvailable = Math.max(0, initialAvailable - count);
-                    details.setAvailableUnits(finalAvailable); // Update the project object directly
+                    details.setAvailableUnits(finalAvailable);
                     if (count > details.getTotalUnits()) {
                         System.err.println("Error: More flats booked (" + count + ") than total units ("
                                 + details.getTotalUnits() + ") for " + project.getProjectName() + "/"
@@ -111,9 +131,18 @@ public class ApplicationService implements IApplicationService {
         });
 
         System.out.println("Loaded " + this.applications.size() + " applications.");
-        return new HashMap<>(this.applications); // Return a copy
+        return new HashMap<>(this.applications);
     }
 
+    /**
+     * Saves the provided map of BTO applications to applications.csv.
+     * Formats application data for CSV storage.
+     * Overwrites the existing file. Updates the internal application map to match
+     * the saved state.
+     *
+     * @param applicationsToSave The map of applications (ApplicationID to
+     *                           BTOApplication object) to save.
+     */
     @Override
     public void saveApplications(Map<String, BTOApplication> applicationsToSave) {
         List<String[]> dataList = new ArrayList<>();
@@ -125,71 +154,140 @@ public class ApplicationService implements IApplicationService {
                             app.getApplicationId(),
                             app.getApplicantNric(),
                             app.getProjectName(),
-                            app.getFlatTypeApplied() == null ? "" : app.getFlatTypeApplied().name(), // Use name() for consistency
+                            app.getFlatTypeApplied() == null ? "" : app.getFlatTypeApplied().name(),
                             app.getStatus().name(),
                             DateUtils.formatDate(app.getApplicationDate())
                     });
                 });
         CsvRW.writeCsv(APPLICATION_FILE, dataList);
         System.out.println("Saved applications.");
-        this.applications = new HashMap<>(applicationsToSave); // Update internal map
+        this.applications = new HashMap<>(applicationsToSave);
     }
 
-     @Override
-     public BTOApplication findApplicationById(String applicationId) {
-         return this.applications.get(applicationId);
-     }
-
-     @Override
-     public BTOApplication findApplicationByApplicantAndProject(String nric, String projectName) {
-         if (nric == null || projectName == null) return null;
-         String appId = nric + "_" + projectName;
-         return findApplicationById(appId);
-     }
-
-     @Override
-     public List<BTOApplication> getApplicationsByProject(String projectName) {
-         if (projectName == null) return new ArrayList<>();
-         return this.applications.values().stream()
-             .filter(app -> projectName.equals(app.getProjectName()))
-             .collect(Collectors.toList());
-     }
-
-     @Override
-     public List<BTOApplication> getApplicationsByStatus(ApplicationStatus status) {
-          if (status == null) return new ArrayList<>();
-          return this.applications.values().stream()
-              .filter(app -> status.equals(app.getStatus()))
-              .collect(Collectors.toList());
-     }
-
+    /**
+     * Finds a BTO application by its unique ID from the internally managed map.
+     *
+     * @param applicationId The ID of the application to find.
+     * @return The BTOApplication object if found, or null otherwise.
+     */
     @Override
-     public List<BTOApplication> getApplicationsByApplicant(String nric) {
-         if (nric == null) return new ArrayList<>();
-         return this.applications.values().stream()
-             .filter(app -> nric.equals(app.getApplicantNric()))
-             .collect(Collectors.toList());
-     }
+    public BTOApplication findApplicationById(String applicationId) {
+        return this.applications.get(applicationId);
+    }
 
-     @Override
-     public void addApplication(BTOApplication application) {
-         if (application != null && !this.applications.containsKey(application.getApplicationId())) {
-             this.applications.put(application.getApplicationId(), application);
-         } else if (application != null) {
-             System.err.println("Application with ID " + application.getApplicationId() + " already exists.");
-         }
-     }
+    /**
+     * Finds a specific BTO application based on the applicant's NRIC and the
+     * project name.
+     * Constructs the expected application ID (NRIC_ProjectName) and uses
+     * `findApplicationById`.
+     *
+     * @param nric        The NRIC of the applicant.
+     * @param projectName The name of the project.
+     * @return The BTOApplication object if found, or null if NRIC/projectName is
+     *         null or the application doesn't exist.
+     */
+    @Override
+    public BTOApplication findApplicationByApplicantAndProject(String nric, String projectName) {
+        if (nric == null || projectName == null)
+            return null;
+        String appId = nric + "_" + projectName;
+        return findApplicationById(appId);
+    }
 
-     @Override
-     public boolean removeApplication(String applicationId) {
-         if (applicationId != null) {
-             return this.applications.remove(applicationId) != null;
-         }
-         return false;
-     }
+    /**
+     * Retrieves a list of all BTO applications submitted for a specific project.
+     * Filters the internal application map based on the projectName field.
+     *
+     * @param projectName The name of the project.
+     * @return A list of BTOApplication objects for the specified project. Returns
+     *         an empty list if projectName is null or no applications are found.
+     */
+    @Override
+    public List<BTOApplication> getApplicationsByProject(String projectName) {
+        if (projectName == null)
+            return new ArrayList<>();
+        return this.applications.values().stream()
+                .filter(app -> projectName.equals(app.getProjectName()))
+                .collect(Collectors.toList());
+    }
 
-     @Override
-     public Map<String, BTOApplication> getAllApplications() {
-         return new HashMap<>(this.applications); // Return copy
-     }
+    /**
+     * Retrieves a list of all BTO applications that currently have a specific
+     * status.
+     * Filters the internal application map based on the status field.
+     *
+     * @param status The ApplicationStatus to filter by.
+     * @return A list of BTOApplication objects with the specified status. Returns
+     *         an empty list if status is null or no applications match.
+     */
+    @Override
+    public List<BTOApplication> getApplicationsByStatus(ApplicationStatus status) {
+        if (status == null)
+            return new ArrayList<>();
+        return this.applications.values().stream()
+                .filter(app -> status.equals(app.getStatus()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Retrieves a list of all BTO applications submitted by a specific applicant.
+     * Filters the internal application map based on the applicantNric field.
+     *
+     * @param nric The NRIC of the applicant.
+     * @return A list of BTOApplication objects submitted by the specified
+     *         applicant. Returns an empty list if nric is null or no applications
+     *         are found.
+     */
+    @Override
+    public List<BTOApplication> getApplicationsByApplicant(String nric) {
+        if (nric == null)
+            return new ArrayList<>();
+        return this.applications.values().stream()
+                .filter(app -> nric.equals(app.getApplicantNric()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Adds a new BTO application to the internal map if an application with the
+     * same ID doesn't already exist.
+     * Prints an error message if a duplicate ID is detected.
+     *
+     * @param application The BTOApplication object to add.
+     */
+    @Override
+    public void addApplication(BTOApplication application) {
+        if (application != null && !this.applications.containsKey(application.getApplicationId())) {
+            this.applications.put(application.getApplicationId(), application);
+        } else if (application != null) {
+            System.err.println("Application with ID " + application.getApplicationId() + " already exists.");
+        }
+    }
+
+    /**
+     * Removes a BTO application from the internal map based on its ID.
+     *
+     * @param applicationId The ID of the application to remove. If null, the method
+     *                      does nothing.
+     * @return true if the application was found and removed, false otherwise.
+     */
+    @Override
+    public boolean removeApplication(String applicationId) {
+        if (applicationId != null) {
+            return this.applications.remove(applicationId) != null;
+        }
+        return false;
+    }
+
+    /**
+     * Retrieves a copy of the map containing all BTO applications currently managed
+     * by the service.
+     * Returning a copy prevents external modification of the internal state.
+     *
+     * @return A new HashMap containing all applications (ApplicationID to
+     *         BTOApplication object).
+     */
+    @Override
+    public Map<String, BTOApplication> getAllApplications() {
+        return new HashMap<>(this.applications);
+    }
 }

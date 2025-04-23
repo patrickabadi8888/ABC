@@ -1,3 +1,10 @@
+/**
+ * Controller handling specific actions initiated by an HDB Officer related to their role,
+ * such as registering to handle projects and viewing their registration status or handling project details.
+ * Inherits common functionality from BaseController.
+ *
+ * @author Kishore Kumar
+ */
 package Controllers;
 
 import java.util.Comparator;
@@ -18,75 +25,102 @@ import Services.IProjectService;
 import Services.IUserService;
 import Utils.DateUtils;
 
-
-// Handles officer-specific actions like registration and status viewing
 public class OfficerActionController extends BaseController {
-
+    /**
+     * Constructs a new OfficerActionController.
+     *
+     * @param userService                Service for user data access.
+     * @param projectService             Service for project data access.
+     * @param applicationService         Service for application data access.
+     * @param officerRegistrationService Service for officer registration data
+     *                                   access.
+     * @param currentUser                The currently logged-in User (expected to
+     *                                   be HDBOfficer).
+     * @param scanner                    Scanner instance for reading user input.
+     * @param authController             Controller for authentication tasks.
+     */
     public OfficerActionController(IUserService userService, IProjectService projectService,
-                                   IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
-                                   User currentUser, Scanner scanner, AuthController authController) {
-        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner, authController);
+            IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
+            User currentUser, Scanner scanner, AuthController authController) {
+        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner,
+                authController);
     }
 
+    /**
+     * Allows an HDB Officer to register their interest in handling a specific BTO
+     * project.
+     * Performs several eligibility checks:
+     * - Officer cannot have an active/booked/pending withdrawal BTO application.
+     * - Finds projects available for registration based on:
+     * - Project has remaining officer slots.
+     * - Project application period is not expired.
+     * - Officer does not already have any registration (Pending/Approved/Rejected)
+     * for the project.
+     * - Project dates do not overlap with any project the officer is currently
+     * handling (Approved).
+     * - Project dates do not overlap with any project the officer has a PENDING
+     * registration for.
+     * - Officer has never submitted a BTO application (any status) for this
+     * project.
+     * - Displays the list of available projects.
+     * - Prompts the officer to select a project.
+     * - Creates a new OfficerRegistration record with PENDING status.
+     * - Saves the new registration.
+     */
     public void registerForProject() {
         if (!(currentUser instanceof HDBOfficer)) {
-             System.out.println("Error: Only HDB Officers can register to handle projects.");
-             return;
+            System.out.println("Error: Only HDB Officers can register to handle projects.");
+            return;
         }
         HDBOfficer officer = (HDBOfficer) currentUser;
         Date currentDate = DateUtils.getCurrentDate();
-        // Sync data is handled in BTOApp main loop
 
-        // Check Officer's applicant status first
-        if (officer.hasActiveApplication() || officer.hasBooked()) { // Check for booked status as well
-            System.out.println("Error: Cannot register to handle a project while you have an active or booked BTO application ("
-                    + officer.getAppliedProjectName() + ", Status: " + officer.getApplicationStatus() + ").");
+        if (officer.hasActiveApplication() || officer.hasBooked()) {
+            System.out.println(
+                    "Error: Cannot register to handle a project while you have an active or booked BTO application ("
+                            + officer.getAppliedProjectName() + ", Status: " + officer.getApplicationStatus() + ").");
             return;
         }
-         if (officer.hasPendingWithdrawal()) {
-            System.out.println("Error: Cannot register to handle a project while you have a pending withdrawal request for application '" + officer.getAppliedProjectName() + "'.");
+        if (officer.hasPendingWithdrawal()) {
+            System.out.println(
+                    "Error: Cannot register to handle a project while you have a pending withdrawal request for application '"
+                            + officer.getAppliedProjectName() + "'.");
             return;
         }
-
 
         System.out.println("\n--- Register to Handle Project ---");
 
-        // Find project currently handled by this officer (if any)
-        Project currentlyHandlingProject = getOfficerHandlingProject(officer); // Use BaseController method
+        Project currentlyHandlingProject = getOfficerHandlingProject(officer);
 
-        // Find projects this officer has PENDING registrations for
-        List<Project> pendingRegistrationProjects = officerRegistrationService.getRegistrationsByOfficer(officer.getNric())
+        List<Project> pendingRegistrationProjects = officerRegistrationService
+                .getRegistrationsByOfficer(officer.getNric())
                 .stream()
                 .filter(reg -> reg.getStatus() == OfficerRegistrationStatus.PENDING)
                 .map(reg -> projectService.findProjectByName(reg.getProjectName()))
-                .filter(p -> p != null) // Filter out projects that might not exist anymore
+                .filter(p -> p != null)
                 .collect(Collectors.toList());
 
-        // Find projects available for registration
         List<Project> availableProjects = projectService.getAllProjects().stream()
-                // 1. Project must have remaining slots
                 .filter(p -> p.getRemainingOfficerSlots() > 0)
-                // 2. Project's application period must not be expired
                 .filter(p -> !p.isApplicationPeriodExpired(currentDate))
-                // 3. Officer must not already have *any* registration (Pending, Approved, Rejected) for this project
                 .filter(p -> officerRegistrationService.getRegistrationsByOfficer(officer.getNric())
-                                .stream()
-                                .noneMatch(reg -> reg.getProjectName().equals(p.getProjectName())))
-                // 4. Project dates must not overlap with the currently handled project (if any)
+                        .stream()
+                        .noneMatch(reg -> reg.getProjectName().equals(p.getProjectName())))
                 .filter(p -> currentlyHandlingProject == null || !checkDateOverlap(p, currentlyHandlingProject))
-                // 5. Project dates must not overlap with any project the officer has a PENDING registration for
-                .filter(p -> pendingRegistrationProjects.stream().noneMatch(pendingProject -> checkDateOverlap(p, pendingProject)))
-                // 6. Officer must not have *any* past or present BTO application for this project
+                .filter(p -> pendingRegistrationProjects.stream()
+                        .noneMatch(pendingProject -> checkDateOverlap(p, pendingProject)))
                 .filter(p -> applicationService.getApplicationsByApplicant(officer.getNric())
-                                .stream()
-                                .noneMatch(app -> app.getProjectName().equals(p.getProjectName())))
-                .sorted(Comparator.comparing((Project p) -> p.getProjectName())) // Sort alphabetically
+                        .stream()
+                        .noneMatch(app -> app.getProjectName().equals(p.getProjectName())))
+                .sorted(Comparator.comparing((Project p) -> p.getProjectName()))
                 .collect(Collectors.toList());
 
         if (availableProjects.isEmpty()) {
-            System.out.println("No projects currently available for you to register for based on eligibility criteria:");
+            System.out
+                    .println("No projects currently available for you to register for based on eligibility criteria:");
             System.out.println("- Project must have open officer slots and not be expired.");
-            System.out.println("- You must not already have any registration (Pending/Approved/Rejected) for the project.");
+            System.out.println(
+                    "- You must not already have any registration (Pending/Approved/Rejected) for the project.");
             System.out.println("- You cannot have an active/booked BTO application or a pending withdrawal request.");
             System.out.println("- Project dates cannot overlap with a project you are already handling.");
             System.out.println("- Project dates cannot overlap with a project you have a PENDING registration for.");
@@ -98,36 +132,44 @@ public class OfficerActionController extends BaseController {
         Project selectedProject = selectProjectFromList(availableProjects);
 
         if (selectedProject != null) {
-            // Create registration - ID is generated internally based on NRIC and Project Name
             OfficerRegistration newRegistration = new OfficerRegistration(officer.getNric(),
                     selectedProject.getProjectName(), currentDate);
-            officerRegistrationService.addRegistration(newRegistration); // Add via service
+            officerRegistrationService.addRegistration(newRegistration);
             System.out.println("Registration request submitted for project '" + selectedProject.getProjectName()
                     + "'. Status: PENDING approval by Manager.");
-            // Save immediately
             officerRegistrationService.saveOfficerRegistrations(officerRegistrationService.getAllRegistrations());
         }
     }
 
+    /**
+     * Displays the HDB Officer's current project handling status and registration
+     * history.
+     * - Shows the project currently being handled (if any, with APPROVED status and
+     * active period).
+     * - Lists all other registration requests (Pending, Rejected, or past Approved)
+     * sorted by date.
+     */
     public void viewRegistrationStatus() {
-        if (!(currentUser instanceof HDBOfficer)) return;
+        if (!(currentUser instanceof HDBOfficer))
+            return;
         HDBOfficer officer = (HDBOfficer) currentUser;
         System.out.println("\n--- Your HDB Officer Registration Status ---");
 
-        // Check currently handled project first
-        Project handlingProject = getOfficerHandlingProject(officer); // Use BaseController method
+        Project handlingProject = getOfficerHandlingProject(officer);
         if (handlingProject != null) {
             System.out.println("You are currently APPROVED and HANDLING project: " + handlingProject.getProjectName());
-            System.out.println("  (Application Period: " + DateUtils.formatDate(handlingProject.getApplicationOpeningDate()) + " to " + DateUtils.formatDate(handlingProject.getApplicationClosingDate()) + ")");
+            System.out.println(
+                    "  (Application Period: " + DateUtils.formatDate(handlingProject.getApplicationOpeningDate())
+                            + " to " + DateUtils.formatDate(handlingProject.getApplicationClosingDate()) + ")");
             System.out.println("----------------------------------------");
         }
 
-        // Get all other registrations (excluding the currently active 'approved' one if found)
-        List<OfficerRegistration> myOtherRegistrations = officerRegistrationService.getRegistrationsByOfficer(officer.getNric())
+        List<OfficerRegistration> myOtherRegistrations = officerRegistrationService
+                .getRegistrationsByOfficer(officer.getNric())
                 .stream()
-                // Filter out the one identified as currently handling (if any)
-                .filter(reg -> handlingProject == null || !reg.getProjectName().equals(handlingProject.getProjectName()))
-                .sorted(Comparator.comparing((OfficerRegistration oR) -> oR.getRegistrationDate()).reversed()) // Sort by date descending
+                .filter(reg -> handlingProject == null
+                        || !reg.getProjectName().equals(handlingProject.getProjectName()))
+                .sorted(Comparator.comparing((OfficerRegistration oR) -> oR.getRegistrationDate()).reversed())
                 .collect(Collectors.toList());
 
         if (myOtherRegistrations.isEmpty() && handlingProject == null) {
@@ -139,26 +181,29 @@ public class OfficerActionController extends BaseController {
                         reg.getProjectName(), reg.getStatus(), DateUtils.formatDate(reg.getRegistrationDate()));
             }
         } else {
-             // This case means handlingProject != null and myOtherRegistrations is empty.
-             // The handling project info was already printed. No need to print anything else.
         }
     }
 
+    /**
+     * Displays the detailed information for the project the HDB Officer is
+     * currently handling.
+     * Uses the shared `viewAndSelectProject` display format from BaseController.
+     * If the officer is not handling any active project, it informs them.
+     */
     public void viewHandlingProjectDetails() {
-         if (!(currentUser instanceof HDBOfficer)) return;
-         HDBOfficer officer = (HDBOfficer) currentUser;
+        if (!(currentUser instanceof HDBOfficer))
+            return;
+        HDBOfficer officer = (HDBOfficer) currentUser;
 
-        // Find the project the officer is currently handling
-        Project project = getOfficerHandlingProject(officer); // Use BaseController method
+        Project project = getOfficerHandlingProject(officer);
 
         if (project == null) {
-            System.out.println("You are not currently handling any active project. Register for one first or check registration status.");
+            System.out.println(
+                    "You are not currently handling any active project. Register for one first or check registration status.");
             return;
         }
 
         System.out.println("\n--- Details for Handling Project: " + project.getProjectName() + " ---");
-        // Use the viewAndSelectProject helper, passing a list containing only the handling project
-        // This reuses the detailed project display format.
         viewAndSelectProject(Collections.singletonList(project), "Project Details");
     }
 }

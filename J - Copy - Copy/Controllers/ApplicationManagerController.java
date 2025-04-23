@@ -20,7 +20,6 @@ import Services.IProjectService;
 import Services.IUserService;
 import Utils.DateUtils;
 
-// Handles Manager actions related to BTO Application approval/rejection
 public class ApplicationManagerController extends BaseController {
 
     public ApplicationManagerController(IUserService userService, IProjectService projectService,
@@ -35,7 +34,6 @@ public class ApplicationManagerController extends BaseController {
 
      public void manageApplications() {
         System.out.println("\n--- Manage BTO Applications ---");
-        // Get projects managed by this manager
         List<Project> myProjects = projectService.getProjectsManagedBy(currentUser.getNric())
                                     .stream()
                                     .sorted(Comparator.comparing(project -> project.getProjectName()))
@@ -45,7 +43,6 @@ public class ApplicationManagerController extends BaseController {
             return;
         }
 
-        // Select project
         System.out.println("Select project to manage applications for:");
         viewAndSelectProject(myProjects, "Select Project");
         Project selectedProject = selectProjectFromList(myProjects);
@@ -53,10 +50,9 @@ public class ApplicationManagerController extends BaseController {
 
         System.out.println("\n--- Applications for Project: " + selectedProject.getProjectName() + " ---");
 
-        // Get all applications for this project via service
         List<BTOApplication> projectApplications = applicationService.getApplicationsByProject(selectedProject.getProjectName())
                 .stream()
-                .sorted(Comparator.comparing(app -> app.getApplicationDate())) // Sort by date
+                .sorted(Comparator.comparing(app -> app.getApplicationDate()))
                 .collect(Collectors.toList());
 
         if (projectApplications.isEmpty()) {
@@ -64,20 +60,17 @@ public class ApplicationManagerController extends BaseController {
             return;
         }
 
-        // Filter for PENDING applications
         List<BTOApplication> pendingApps = projectApplications.stream()
                 .filter(app -> app.getStatus() == ApplicationStatus.PENDING)
                 .collect(Collectors.toList());
 
-        // --- Process Pending Applications ---
         System.out.println("--- Pending Applications ---");
         if (pendingApps.isEmpty()) {
             System.out.println("(None)");
         } else {
-            // Display pending applications for selection
             for (int i = 0; i < pendingApps.size(); i++) {
                 BTOApplication app = pendingApps.get(i);
-                User applicantUser = userService.findUserByNric(app.getApplicantNric()); // Get applicant details
+                User applicantUser = userService.findUserByNric(app.getApplicantNric());
                 System.out.printf("%d. NRIC: %s | Name: %-15s | Type: %-8s | Date: %s\n",
                         i + 1, app.getApplicantNric(),
                         applicantUser != null ? applicantUser.getName() : "N/A",
@@ -85,40 +78,34 @@ public class ApplicationManagerController extends BaseController {
                         DateUtils.formatDate(app.getApplicationDate()));
             }
 
-            // Prompt for action
             int choice = getIntInput("Enter number to Approve/Reject (or 0 to skip): ", 0, pendingApps.size());
 
             if (choice >= 1) {
                 BTOApplication appToProcess = pendingApps.get(choice - 1);
                 User applicantUser = userService.findUserByNric(appToProcess.getApplicantNric());
 
-                // Validate applicant data
                 if (!(applicantUser instanceof Applicant)) {
                     System.out.println("Error: Applicant data not found or invalid for NRIC "
                             + appToProcess.getApplicantNric() + ". Rejecting application.");
-                    appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL); // Set status in application object
-                    // Applicant profile status will be updated during next sync or manually if needed
-                    applicationService.saveApplications(applicationService.getAllApplications()); // Save change
-                    return; // Exit processing for this round
+                    appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
+                    applicationService.saveApplications(applicationService.getAllApplications());
+                    return;
                 }
                 Applicant applicant = (Applicant) applicantUser;
 
-                // Prompt for Approve/Reject
                 System.out.print("Approve or Reject application for Applicant " + applicant.getName() + "? (A/R): ");
                 String action = scanner.nextLine().trim().toUpperCase();
 
                 if (action.equals("A")) {
-                    // --- Approve Action ---
                     FlatType appliedType = appToProcess.getFlatTypeApplied();
                     if (appliedType == null) {
                         System.out.println("Error: Application has no specified flat type. Cannot approve. Rejecting.");
                         appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
-                        applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL); // Update profile immediately
+                        applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
                         applicationService.saveApplications(applicationService.getAllApplications());
                         return;
                     }
 
-                    // Get project details (refreshing might be good practice)
                     Project currentProjectState = projectService.findProjectByName(selectedProject.getProjectName());
                      if (currentProjectState == null) {
                           System.out.println("Error: Project details not found. Cannot approve. Rejecting.");
@@ -127,7 +114,7 @@ public class ApplicationManagerController extends BaseController {
                           applicationService.saveApplications(applicationService.getAllApplications());
                           return;
                      }
-                    FlatTypeDetails details = currentProjectState.getFlatTypeDetails(appliedType); // Use non-mutable getter is fine here
+                    FlatTypeDetails details = currentProjectState.getFlatTypeDetails(appliedType);
 
                     if (details == null) {
                         System.out.println("Error: Applied flat type (" + appliedType.getDisplayName()
@@ -138,7 +125,6 @@ public class ApplicationManagerController extends BaseController {
                         return;
                     }
 
-                    // Check if approving exceeds total units (based on SUCCESSFUL or BOOKED apps)
                     long alreadySuccessfulOrBookedCount = applicationService.getApplicationsByProject(currentProjectState.getProjectName())
                             .stream()
                             .filter(a -> a.getFlatTypeApplied() == appliedType &&
@@ -146,37 +132,30 @@ public class ApplicationManagerController extends BaseController {
                             .count();
 
                     if (alreadySuccessfulOrBookedCount < details.getTotalUnits()) {
-                        // Approve: Update application and applicant status
                         appToProcess.setStatus(ApplicationStatus.SUCCESSFUL);
-                        applicant.setApplicationStatus(ApplicationStatus.SUCCESSFUL); // Update profile immediately
+                        applicant.setApplicationStatus(ApplicationStatus.SUCCESSFUL);
                         System.out.println("Application Approved (Status: SUCCESSFUL). Applicant can now book via Officer.");
-                        applicationService.saveApplications(applicationService.getAllApplications()); // Save change
-                        // userService.saveUsers(userService.getAllUsers()); // Optional immediate save of user profile
+                        applicationService.saveApplications(applicationService.getAllApplications());
                     } else {
-                        // Cannot approve due to capacity
                         System.out.println("Cannot approve. The number of successful/booked applications (" + alreadySuccessfulOrBookedCount + ") already meets or exceeds the total supply ("
                                 + details.getTotalUnits() + ") for " + appliedType.getDisplayName() + ".");
                         System.out.println("Consider rejecting this application or managing existing successful/booked ones.");
                     }
 
                 } else if (action.equals("R")) {
-                    // --- Reject Action ---
                     appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
-                    applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL); // Update profile immediately
-                    applicant.setBookedFlatType(null); // Ensure booked type is cleared if they were somehow booked before
+                    applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
+                    applicant.setBookedFlatType(null);
                     System.out.println("Application Rejected (Status: UNSUCCESSFUL).");
-                    applicationService.saveApplications(applicationService.getAllApplications()); // Save change
-                    // userService.saveUsers(userService.getAllUsers()); // Optional immediate save
+                    applicationService.saveApplications(applicationService.getAllApplications());
                 } else {
                     System.out.println("Invalid action ('A' or 'R' expected). No change made.");
                 }
             } else if (choice != 0) {
                 System.out.println("Invalid choice.");
             }
-             // If choice is 0, skip processing
         }
 
-        // --- Display Other Statuses ---
         System.out.println("\n--- Other Application Statuses ---");
         List<BTOApplication> otherApps = projectApplications.stream()
                 .filter(app -> app.getStatus() != ApplicationStatus.PENDING)

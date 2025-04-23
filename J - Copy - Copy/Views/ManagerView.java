@@ -1,3 +1,10 @@
+/**
+ * View component responsible for displaying the menu and handling input for the HDB Manager role.
+ * Interacts with the {@link Controllers.ManagerController} to execute actions covering project management,
+ * staff/application management, reporting, and enquiry oversight.
+ *
+ * @author Jun Yang
+ */
 package Views;
 
 import java.util.Scanner;
@@ -8,11 +15,29 @@ import Controllers.AuthController;
 public class ManagerView extends BaseView {
     private final ManagerController managerController;
 
+    /**
+     * Constructs a new ManagerView.
+     *
+     * @param scanner        Scanner instance for reading user input.
+     * @param currentUser    The currently logged-in User (expected to be
+     *                       HDBManager).
+     * @param controller     The ManagerController associated with this view.
+     * @param authController Controller for authentication tasks.
+     */
     public ManagerView(Scanner scanner, User currentUser, ManagerController controller, AuthController authController) {
         super(scanner, currentUser, controller, authController);
         this.managerController = controller;
     }
 
+    /**
+     * Displays the main menu for the HDB Manager role.
+     * Presents options grouped by function: Project Management, Staff & Application
+     * Management,
+     * Reporting & Enquiries, and Common Actions (filters, password change, logout).
+     * Reads user input and calls the corresponding methods on the ManagerController
+     * or BaseView helpers.
+     * Loops until the user chooses to logout.
+     */
     @Override
     public void displayMenu() {
         boolean logout = false;
@@ -43,19 +68,45 @@ public class ManagerView extends BaseView {
             int choice = getMenuChoice(0, 14);
 
             switch (choice) {
-                case 1: managerController.createProject(); break;
-                case 2: managerController.editProject(); break;
-                case 3: managerController.deleteProject(); break;
-                case 4: managerController.toggleProjectVisibility(); break;
-                case 5: managerController.viewAllProjects(); break;
-                case 6: managerController.viewMyProjects(); break;
-                case 7: managerController.manageOfficerRegistrations(); break;
-                case 8: managerController.manageApplications(); break;
-                case 9: managerController.manageWithdrawalRequests(); break;
-                case 10: managerController.generateApplicantReport(); break;
-                case 11: managerController.viewAllEnquiries(); break;
-                case 12: managerController.viewAndReplyToManagedEnquiries(); break;
-                case 13: applyFilters(); break;
+                case 1:
+                    managerController.createProject();
+                    break;
+                case 2:
+                    managerController.editProject();
+                    break;
+                case 3:
+                    managerController.deleteProject();
+                    break;
+                case 4:
+                    managerController.toggleProjectVisibility();
+                    break;
+                case 5:
+                    managerController.viewAllProjects();
+                    break;
+                case 6:
+                    managerController.viewMyProjects();
+                    break;
+                case 7:
+                    managerController.manageOfficerRegistrations();
+                    break;
+                case 8:
+                    managerController.manageApplications();
+                    break;
+                case 9:
+                    managerController.manageWithdrawalRequests();
+                    break;
+                case 10:
+                    managerController.generateApplicantReport();
+                    break;
+                case 11:
+                    managerController.viewAllEnquiries();
+                    break;
+                case 12:
+                    managerController.viewAndReplyToManagedEnquiries();
+                    break;
+                case 13:
+                    applyFilters();
+                    break;
                 case 14:
                     if (changePassword()) {
                         logout = true;
@@ -65,11 +116,13 @@ public class ManagerView extends BaseView {
                     logout = true;
                     System.out.println("Logging out...");
                     break;
-                default: System.out.println("Invalid choice."); break;
+                default:
+                    System.out.println("Invalid choice.");
+                    break;
             }
-             if (!logout && choice != 0) {
-                 pause();
-             }
+            if (!logout && choice != 0) {
+                pause();
+            }
         }
     }
 }

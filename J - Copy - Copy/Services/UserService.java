@@ -1,3 +1,11 @@
+
+/**
+ * Service implementation for managing User data (Applicants, Officers, Managers).
+ * Handles loading user data from separate CSV files for each role and saving them back.
+ * Provides methods for finding users by NRIC and retrieving all users.
+ *
+ * @author Jordon
+ */
 package Services;
 
 import java.io.File;
@@ -24,13 +32,24 @@ public class UserService implements IUserService {
 
     private Map<String, User> users;
 
+    /**
+     * Constructs a new UserService. Initializes the internal user map.
+     */
     public UserService() {
         this.users = new HashMap<>();
     }
 
+    /**
+     * Loads user data from ApplicantList.csv, OfficerList.csv, and ManagerList.csv.
+     * Validates NRIC format and handles potential duplicates or role conflicts
+     * (e.g., user in multiple files).
+     * Populates the internal user map.
+     *
+     * @return The map containing all loaded users, keyed by NRIC.
+     */
     @Override
     public Map<String, User> loadUsers() {
-        this.users.clear(); // Clear existing users before loading
+        this.users.clear();
 
         CsvRW.readCsv(APPLICANT_LIST_FILE, APPLICANT_HEADER.length).forEach(data -> {
             try {
@@ -100,11 +119,19 @@ public class UserService implements IUserService {
         });
 
         System.out.println("Loaded " + this.users.size() + " unique users.");
-        return this.users; // Return the map after loading
+        return this.users;
     }
 
+    /**
+     * Saves the provided map of users back to their respective CSV files
+     * (ApplicantList, OfficerList, ManagerList).
+     * Overwrites the existing files. Updates the internal user map to match the
+     * saved state.
+     *
+     * @param usersToSave The map of users (NRIC to User object) to save.
+     */
     @Override
-    public void saveUsers(Map<String, User> usersToSave) { // Accept map to save
+    public void saveUsers(Map<String, User> usersToSave) {
         List<String[]> applicantData = new ArrayList<>();
         List<String[]> officerData = new ArrayList<>();
         List<String[]> managerData = new ArrayList<>();
@@ -138,26 +165,32 @@ public class UserService implements IUserService {
         CsvRW.writeCsv(OFFICER_LIST_FILE, officerData);
         CsvRW.writeCsv(MANAGER_LIST_FILE, managerData);
         System.out.println("Saved users.");
-        // Update internal state if the saved map is the one managed by this service
         if (usersToSave == this.users) {
-             this.users = new HashMap<>(usersToSave);
+            this.users = new HashMap<>(usersToSave);
         } else {
-             // If an external map was passed, update the internal map as well
-             // Or decide if saveUsers should *only* save the internal state.
-             // For simplicity, let's assume it saves what's passed.
-             // If callers modify the map returned by loadUsers/getAllUsers,
-             // they should call saveUsers with that modified map.
         }
     }
 
-     @Override
-     public User findUserByNric(String nric) {
-         return this.users.get(nric);
-     }
+    /**
+     * Finds a user by their NRIC from the internally managed map.
+     *
+     * @param nric The NRIC of the user to find.
+     * @return The User object if found, or null otherwise.
+     */
+    @Override
+    public User findUserByNric(String nric) {
+        return this.users.get(nric);
+    }
 
-     @Override
-     public Map<String, User> getAllUsers() {
-         // Return a copy to prevent external modification of the internal map
-         return new HashMap<>(this.users);
-     }
+    /**
+     * Retrieves a copy of the map containing all users currently managed by the
+     * service.
+     * Returning a copy prevents external modification of the internal state.
+     *
+     * @return A new HashMap containing all users (NRIC to User object).
+     */
+    @Override
+    public Map<String, User> getAllUsers() {
+        return new HashMap<>(this.users);
+    }
 }

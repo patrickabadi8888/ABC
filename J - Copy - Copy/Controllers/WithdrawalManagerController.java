@@ -1,3 +1,10 @@
+/**
+ * Controller handling actions performed by an HDB Manager related to managing
+ * BTO application withdrawal requests (status PENDING_WITHDRAWAL) for projects they manage.
+ * Inherits common functionality from BaseController.
+ *
+ * @author Jordon
+ */
 package Controllers;
 
 import java.util.Comparator;
@@ -21,9 +28,21 @@ import Services.IUserService;
 import Utils.DateUtils;
 
 
-// Handles Manager actions related to Withdrawal Requests
 public class WithdrawalManagerController extends BaseController {
-
+/**
+ * Constructs a new WithdrawalManagerController.
+ * Ensures the current user is an HDBManager.
+ *
+ * @param userService Service for user data access.
+ * @param projectService Service for project data access.
+ * @param applicationService Service for application data access.
+ * @param officerRegistrationService Service for officer registration data access.
+ * @param enquiryService Service for enquiry data access.
+ * @param currentUser The currently logged-in User (must be HDBManager).
+ * @param scanner Scanner instance for reading user input.
+ * @param authController Controller for authentication tasks.
+ * @throws IllegalArgumentException if the currentUser is not an HDBManager.
+ */
     public WithdrawalManagerController(IUserService userService, IProjectService projectService,
                                    IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
                                    IEnquiryService enquiryService,
@@ -33,10 +52,27 @@ public class WithdrawalManagerController extends BaseController {
             throw new IllegalArgumentException("WithdrawalManagerController requires an HDBManager user.");
         }
     }
-
+/**
+ * Guides the HDB Manager through approving or rejecting pending withdrawal requests for applications in their managed projects.
+ * - Finds all applications with status PENDING_WITHDRAWAL for projects managed by the current manager.
+ * - Displays these pending requests, showing applicant details and the inferred original status before withdrawal.
+ * - Prompts the manager to select a request to process.
+ * - Validates applicant and project data.
+ * - Determines the original status (using stored value if available, otherwise inferring).
+ * - Verifies the application is still in PENDING_WITHDRAWAL status.
+ * - Prompts for Approve (A) or Reject (R) action.
+ * - If Approve:
+ *   - Determines the final status based on the original status (UNSUCCESSFUL if originally BOOKED/SUCCESSFUL, WITHDRAWN if originally PENDING).
+ *   - If originally BOOKED, attempts to release the flat unit back to the project by incrementing available units in FlatTypeDetails.
+ *   - Updates the application status to the final determined status.
+ *   - Updates the applicant's profile status and clears their booked flat type.
+ *   - Saves application data, and project data if a unit was released.
+ * - If Reject:
+ *   - Reverts the application status and the applicant's profile status back to the original status determined earlier.
+ *   - Saves the application data.
+ */
      public void manageWithdrawalRequests() {
         System.out.println("\n--- Manage Withdrawal Requests ---");
-        // Get names of projects managed by this manager
         List<String> myProjectNames = projectService.getProjectsManagedBy(currentUser.getNric())
                 .stream()
                 .map((Project p) -> p.getProjectName())
@@ -47,11 +83,10 @@ public class WithdrawalManagerController extends BaseController {
             return;
         }
 
-        // Find PENDING_WITHDRAWAL applications for the managed projects
         List<BTOApplication> pendingWithdrawals = applicationService.getAllApplications().values().stream()
                 .filter(app -> app.getStatus() == ApplicationStatus.PENDING_WITHDRAWAL)
-                .filter(app -> myProjectNames.contains(app.getProjectName())) // Filter by managed projects
-                .sorted(Comparator.comparing((BTOApplication app) -> app.getApplicationDate())) // Sort by date
+                .filter(app -> myProjectNames.contains(app.getProjectName()))
+                .sorted(Comparator.comparing((BTOApplication app) -> app.getApplicationDate()))
                 .collect(Collectors.toList());
 
         if (pendingWithdrawals.isEmpty()) {
@@ -59,24 +94,19 @@ public class WithdrawalManagerController extends BaseController {
             return;
         }
 
-        // --- Display Pending Withdrawals ---
         System.out.println("--- Pending Withdrawal Requests ---");
         for (int i = 0; i < pendingWithdrawals.size(); i++) {
             BTOApplication app = pendingWithdrawals.get(i);
-            User applicantUser = userService.findUserByNric(app.getApplicantNric()); // Get applicant info
+            User applicantUser = userService.findUserByNric(app.getApplicantNric());
 
-            // Determine the status *before* withdrawal request was made
             ApplicationStatus statusBefore = app.getStatusBeforeWithdrawal();
             if (statusBefore == null) {
-                 // statusBeforeWithdrawal should be set when status becomes PENDING_WITHDRAWAL
-                 // If it's null here, it's an inconsistency, but we can try to infer.
                  statusBefore = inferStatusBeforeWithdrawal(app, (applicantUser instanceof Applicant) ? (Applicant) applicantUser : null);
                  System.out.print(" (Inferred Original: " + statusBefore + ")");
             } else {
                 System.out.print(" (Original: " + statusBefore + ")");
             }
 
-            // Print application details
             System.out.printf("\n%d. NRIC: %s | Name: %-15s | Project: %-15s | Type: %-8s | App Date: %s",
                     i + 1,
                     app.getApplicantNric(),
@@ -84,17 +114,15 @@ public class WithdrawalManagerController extends BaseController {
                     app.getProjectName(),
                     app.getFlatTypeApplied() != null ? app.getFlatTypeApplied().getDisplayName() : "N/A",
                     DateUtils.formatDate(app.getApplicationDate()));
-            System.out.println(); // Newline after printing details
+            System.out.println();
         }
 
-        // Prompt for action
         int choice = getIntInput("Enter number to Approve/Reject withdrawal (or 0 to skip): ", 0, pendingWithdrawals.size());
 
         if (choice >= 1) {
             BTOApplication appToProcess = pendingWithdrawals.get(choice - 1);
             User applicantUser = userService.findUserByNric(appToProcess.getApplicantNric());
 
-            // Validate Applicant
             if (!(applicantUser instanceof Applicant)) {
                 System.out.println("Error: Applicant data not found or invalid for NRIC "
                         + appToProcess.getApplicantNric() + ". Cannot process withdrawal.");
@@ -102,7 +130,6 @@ public class WithdrawalManagerController extends BaseController {
             }
             Applicant applicant = (Applicant) applicantUser;
 
-            // Validate Project
             Project project = projectService.findProjectByName(appToProcess.getProjectName());
             if (project == null) {
                 System.out.println("Error: Project data not found for application "
@@ -110,43 +137,36 @@ public class WithdrawalManagerController extends BaseController {
                 return;
             }
 
-            // Determine original status (use stored value if available, otherwise infer)
             ApplicationStatus originalStatus = appToProcess.getStatusBeforeWithdrawal();
             if (originalStatus == null) {
                 originalStatus = inferStatusBeforeWithdrawal(appToProcess, applicant);
                  System.out.println("Note: Original status inferred as " + originalStatus + " due to missing data.");
             }
 
-             // Double check current status is still PENDING_WITHDRAWAL
              if (appToProcess.getStatus() != ApplicationStatus.PENDING_WITHDRAWAL) {
                   System.out.println("Error: Application status is no longer PENDING_WITHDRAWAL (Current: " + appToProcess.getStatus() + "). Cannot process.");
                   return;
              }
 
 
-            // Prompt for Approve/Reject
             System.out.print("Approve or Reject withdrawal request for Applicant " + applicant.getName() + "? (A/R): ");
             String action = scanner.nextLine().trim().toUpperCase();
 
             if (action.equals("A")) {
-                // --- Approve Withdrawal ---
                 ApplicationStatus finalStatus;
                 boolean releasedUnit = false;
 
-                // Determine final status based on original status
                 if (originalStatus == ApplicationStatus.BOOKED) {
-                    finalStatus = ApplicationStatus.UNSUCCESSFUL; // Penalize booked withdrawal
-                    FlatType bookedType = appToProcess.getFlatTypeApplied(); // Type that was booked
+                    finalStatus = ApplicationStatus.UNSUCCESSFUL;
+                    FlatType bookedType = appToProcess.getFlatTypeApplied();
                     if (bookedType != null) {
-                        FlatTypeDetails details = project.getMutableFlatTypeDetails(bookedType); // Get mutable details
+                        FlatTypeDetails details = project.getMutableFlatTypeDetails(bookedType);
                         if (details != null) {
-                            // Increment available units for the released flat
                             if (details.incrementAvailableUnits()) {
                                 releasedUnit = true;
                                 System.out.println("Unit for " + bookedType.getDisplayName()
                                         + " released back to project " + project.getProjectName() + ". Available: " + details.getAvailableUnits());
                             } else {
-                                // Should not happen if units were correctly decremented on booking
                                 System.err.println("Error: Could not increment available units for " + bookedType.getDisplayName() + " (already at max?). Check data consistency.");
                             }
                         } else {
@@ -156,39 +176,30 @@ public class WithdrawalManagerController extends BaseController {
                         System.err.println("Error: Cannot determine booked flat type to release unit during withdrawal approval.");
                     }
                 } else if (originalStatus == ApplicationStatus.SUCCESSFUL) {
-                    finalStatus = ApplicationStatus.UNSUCCESSFUL; // Penalize successful withdrawal
-                } else { // Original was PENDING or unknown/inferred as PENDING
-                    finalStatus = ApplicationStatus.WITHDRAWN; // No penalty, just withdrawn
+                    finalStatus = ApplicationStatus.UNSUCCESSFUL;
+                } else {
+                    finalStatus = ApplicationStatus.WITHDRAWN;
                 }
 
-                // Update application status
-                appToProcess.setStatus(finalStatus); // This also clears statusBeforeWithdrawal
+                appToProcess.setStatus(finalStatus);
 
-                // Update applicant profile
                 applicant.setApplicationStatus(finalStatus);
-                applicant.setBookedFlatType(null); // Clear booked type regardless of original status
+                applicant.setBookedFlatType(null);
 
                 System.out.println("Withdrawal request Approved. Application status set to " + finalStatus + ".");
 
-                // Save changes
                 applicationService.saveApplications(applicationService.getAllApplications());
                 if (releasedUnit) {
-                    projectService.saveProjects(projectService.getAllProjects()); // Save project if unit was released
+                    projectService.saveProjects(projectService.getAllProjects());
                 }
-                // userService.saveUsers(userService.getAllUsers()); // Save user profile change
 
             } else if (action.equals("R")) {
-                // --- Reject Withdrawal ---
-                // Revert application status to original status
-                appToProcess.setStatus(originalStatus); // This clears statusBeforeWithdrawal
+                appToProcess.setStatus(originalStatus);
 
-                // Revert applicant profile status
                 applicant.setApplicationStatus(originalStatus);
-                // Note: We don't need to reset bookedFlatType here, as it wouldn't have been cleared yet.
 
                 System.out.println("Withdrawal request Rejected. Application status reverted to " + originalStatus + ".");
-                applicationService.saveApplications(applicationService.getAllApplications()); // Save the reverted status
-                // userService.saveUsers(userService.getAllUsers()); // Save reverted user status
+                applicationService.saveApplications(applicationService.getAllApplications());
 
             } else {
                 System.out.println("Invalid action ('A' or 'R' expected). No change made.");
@@ -196,28 +207,30 @@ public class WithdrawalManagerController extends BaseController {
         } else if (choice != 0) {
             System.out.println("Invalid choice.");
         }
-         // If choice is 0, skip processing
     }
 
-     // Helper to infer original status if statusBeforeWithdrawal wasn't set correctly
+    /**
+     * Infers the application status before withdrawal based on the current application and applicant data.
+     *
+     * @param app The BTOApplication object representing the application.
+     * @param applicant The Applicant object representing the applicant.
+     * @return The inferred ApplicationStatus before withdrawal.
+     */
+    /** 
+     * @param app
+     * @param applicant
+     * @return
+     */
     private ApplicationStatus inferStatusBeforeWithdrawal(BTOApplication app, Applicant applicant) {
-         // If applicant profile shows BOOKED and the application matches the flat type, assume BOOKED.
          if (applicant != null && applicant.hasBooked() && applicant.getBookedFlatType() == app.getFlatTypeApplied()) {
              return ApplicationStatus.BOOKED;
          }
-         // If applicant profile shows SUCCESSFUL for this project, assume SUCCESSFUL.
-         // (Checking project name might be needed if applicant could have multiple non-booked apps somehow)
          else if (applicant != null && applicant.getApplicationStatus() == ApplicationStatus.SUCCESSFUL && applicant.getAppliedProjectName().equals(app.getProjectName())) {
               return ApplicationStatus.SUCCESSFUL;
          }
-         // If the application itself has a flat type (likely from PENDING or SUCCESSFUL state), lean towards SUCCESSFUL as the most likely state before withdrawal if not BOOKED.
          else if (app.getFlatTypeApplied() != null) {
-              // This is ambiguous. Could have been PENDING or SUCCESSFUL.
-              // Let's default to SUCCESSFUL if a flat type exists, assuming approval happened.
-              // This matches the old logic.
               return ApplicationStatus.SUCCESSFUL;
          }
-         // Default fallback: assume it was PENDING.
          return ApplicationStatus.PENDING;
     }
 }

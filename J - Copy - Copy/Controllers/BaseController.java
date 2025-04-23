@@ -1,3 +1,11 @@
+/**
+ * Abstract base class for all controllers in the BTO application.
+ * Provides common dependencies (services, current user, scanner, auth controller),
+ * shared utility methods (finding data, checking date overlaps, input validation),
+ * and common functionalities like project filtering and display.
+ *
+ * @author Kai Wang
+ */
 package Controllers;
 
 import Enums.OfficerRegistrationStatus;
@@ -31,23 +39,33 @@ import java.util.stream.Collectors;
 import Utils.DateUtils;
 
 public abstract class BaseController {
-    // Services are injected instead of raw data maps
     protected final IUserService userService;
     protected final IProjectService projectService;
     protected final IApplicationService applicationService;
     protected final IOfficerRegistrationService officerRegistrationService;
-    // User, Scanner, AuthController remain
     protected final User currentUser;
     protected final Scanner scanner;
     protected final AuthController authController;
 
-    // Filters remain as state within the controller instance (or potentially moved to a separate FilterState object)
     protected String filterLocation = null;
     protected FlatType filterFlatType = null;
 
+    /**
+     * Constructs a new BaseController, initializing shared services and components.
+     *
+     * @param userService                Service for user data access.
+     * @param projectService             Service for project data access.
+     * @param applicationService         Service for application data access.
+     * @param officerRegistrationService Service for officer registration data
+     *                                   access.
+     * @param currentUser                The currently logged-in User object.
+     * @param scanner                    Scanner instance for reading user input.
+     * @param authController             Controller for authentication tasks (like
+     *                                   password change).
+     */
     public BaseController(IUserService userService, IProjectService projectService,
-                          IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
-                          User currentUser, Scanner scanner, AuthController authController) {
+            IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
+            User currentUser, Scanner scanner, AuthController authController) {
         this.userService = userService;
         this.projectService = projectService;
         this.applicationService = applicationService;
@@ -57,25 +75,48 @@ public abstract class BaseController {
         this.authController = authController;
     }
 
-    // Finding methods now use injected services
+    /**
+     * Finds a project by its name using the injected project service.
+     *
+     * @param name The name of the project to find.
+     * @return The Project object if found, null otherwise.
+     */
     protected Project findProjectByName(String name) {
         return projectService.findProjectByName(name);
     }
 
+    /**
+     * Finds a BTO application based on the applicant's NRIC and project name using
+     * the injected application service.
+     *
+     * @param nric        The applicant's NRIC.
+     * @param projectName The project name.
+     * @return The BTOApplication object if found, null otherwise.
+     */
     protected BTOApplication findApplicationByApplicantAndProject(String nric, String projectName) {
         return applicationService.findApplicationByApplicantAndProject(nric, projectName);
     }
 
-    // This logic relies on OfficerRegistrationService now
+    /**
+     * Determines which active project an HDB Officer is currently approved to
+     * handle.
+     * Checks the officer registration service for an APPROVED registration and
+     * verifies
+     * that the corresponding project's application period is still active.
+     *
+     * @param officer The HDBOfficer whose handling project is to be determined.
+     * @return The Project object the officer is currently handling and which is
+     *         active, or null if none.
+     */
     public Project getOfficerHandlingProject(HDBOfficer officer) {
         if (officer == null)
             return null;
         Date today = DateUtils.getCurrentDate();
-        OfficerRegistration approvedReg = officerRegistrationService.getApprovedRegistrationForOfficer(officer.getNric());
+        OfficerRegistration approvedReg = officerRegistrationService
+                .getApprovedRegistrationForOfficer(officer.getNric());
 
         if (approvedReg != null) {
             Project project = projectService.findProjectByName(approvedReg.getProjectName());
-            // Additionally check if the project's application period is still active
             if (project != null && project.isApplicationPeriodActive(today)) {
                 return project;
             }
@@ -83,102 +124,160 @@ public abstract class BaseController {
         return null;
     }
 
-    // Date overlap logic remains the same
+    /**
+     * Checks if the application periods of two projects overlap.
+     * Handles null projects or dates gracefully (returns false).
+     * Overlap occurs if p1's start is not after p2's end AND p1's end is not before
+     * p2's start.
+     *
+     * @param p1 The first project.
+     * @param p2 The second project.
+     * @return true if the application periods overlap, false otherwise or if data
+     *         is invalid.
+     */
     protected boolean checkDateOverlap(Project p1, Project p2) {
         if (p1 == null || p2 == null || p1.getApplicationOpeningDate() == null || p1.getApplicationClosingDate() == null
                 || p2.getApplicationOpeningDate() == null || p2.getApplicationClosingDate() == null) {
             return false;
         }
-        // Check if p1 starts after p2 ends OR p1 ends before p2 starts
         boolean noOverlap = p1.getApplicationOpeningDate().after(p2.getApplicationClosingDate()) ||
-                            p1.getApplicationClosingDate().before(p2.getApplicationOpeningDate());
-        return !noOverlap; // Overlap exists if 'noOverlap' is false
+                p1.getApplicationClosingDate().before(p2.getApplicationOpeningDate());
+        return !noOverlap;
     }
 
-    // Filtering now operates on the list returned by the service
+    /**
+     * Retrieves a list of projects based on various filtering criteria.
+     * Applies internal controller filters (location, flat type) first.
+     * Then applies boolean flags to control checks for visibility, application
+     * period activity/expiry,
+     * eligibility (based on current user), and unit availability.
+     * Sorts the final list by project name.
+     *
+     * @param checkVisibility        If true, only includes projects visible to the
+     *                               current user (see
+     *                               {@link #isProjectVisibleToCurrentUser(Project)}).
+     * @param checkEligibility       If true, only includes projects for which the
+     *                               current user is eligible to apply for at least
+     *                               one flat type (see
+     *                               {@link #canApplyForFlatType(FlatType)}).
+     *                               Ignored for Managers.
+     * @param checkAvailability      If true, only includes projects where there is
+     *                               at least one flat type the user is eligible for
+     *                               AND which has available units (> 0). Ignored
+     *                               for Managers. Requires checkEligibility to be
+     *                               meaningful.
+     * @param checkApplicationPeriod If true, only includes projects whose
+     *                               application period is currently active.
+     * @param checkNotExpired        If true, only includes projects whose
+     *                               application period has not yet expired.
+     * @return A sorted list of Project objects matching all applied filters.
+     */
     protected List<Project> getFilteredProjects(boolean checkVisibility, boolean checkEligibility,
             boolean checkAvailability, boolean checkApplicationPeriod, boolean checkNotExpired) {
         Date currentDate = DateUtils.getCurrentDate();
-        List<Project> allProjects = projectService.getAllProjects(); // Get all projects from the service
+        List<Project> allProjects = projectService.getAllProjects();
 
         return allProjects.stream()
-                // Apply location and flat type filters first
                 .filter(p -> filterLocation == null || p.getNeighborhood().equalsIgnoreCase(filterLocation))
                 .filter(p -> filterFlatType == null || p.getFlatTypes().containsKey(filterFlatType))
-                // Apply boolean checks passed as arguments
                 .filter(p -> !checkVisibility || isProjectVisibleToCurrentUser(p))
                 .filter(p -> !checkApplicationPeriod || p.isApplicationPeriodActive(currentDate))
                 .filter(p -> !checkNotExpired || !p.isApplicationPeriodExpired(currentDate))
-                // Apply eligibility and availability checks
                 .filter(p -> {
-                    if (!checkEligibility && !checkAvailability) return true; // Skip if not checking these
-                    if (currentUser instanceof HDBManager) return true; // Managers see all regardless
+                    if (!checkEligibility && !checkAvailability)
+                        return true;
+                    if (currentUser instanceof HDBManager)
+                        return true;
 
-                    // Check if current user is eligible for *any* flat type in this project
                     boolean eligibleForAnyType = p.getFlatTypes().keySet().stream()
                             .anyMatch(flatType -> this.canApplyForFlatType(flatType));
-                    if (checkEligibility && !eligibleForAnyType) return false; // Filter out if eligibility check fails
+                    if (checkEligibility && !eligibleForAnyType)
+                        return false;
 
-                    if (!checkAvailability) return true; // Skip availability check if not required
+                    if (!checkAvailability)
+                        return true;
 
-                    // Check if there's at least one flat type that the user is eligible for AND has available units
                     boolean eligibleAndAvailableExists = p.getFlatTypes().entrySet().stream()
                             .anyMatch(entry -> {
                                 FlatType type = entry.getKey();
                                 FlatTypeDetails details = entry.getValue();
                                 return canApplyForFlatType(type) && details.getAvailableUnits() > 0;
                             });
-                    return eligibleAndAvailableExists; // Must satisfy both eligibility (if checked) and availability (if checked)
+                    return eligibleAndAvailableExists;
                 })
-                .sorted(Comparator.comparing(project -> project.getProjectName())) // Sort final filtered list
+                .sorted(Comparator.comparing(project -> project.getProjectName()))
                 .collect(Collectors.toList());
     }
 
-    // Visibility check needs OfficerRegistrationService
+    /**
+     * Determines if a specific project should be visible to the currently logged-in
+     * user.
+     * - Managers see all projects.
+     * - Applicants see projects that are globally visible OR projects they have
+     * applied to (and application is not failed/withdrawn).
+     * - Officers see projects that are globally visible OR projects they are
+     * approved to handle.
+     *
+     * @param project The project to check visibility for.
+     * @return true if the project is visible to the current user, false otherwise.
+     */
     protected boolean isProjectVisibleToCurrentUser(Project project) {
-        if (currentUser instanceof HDBManager) return true; // Managers see everything
+        if (currentUser instanceof HDBManager)
+            return true;
 
         boolean appliedToThis = false;
         if (currentUser instanceof Applicant) {
             Applicant appUser = (Applicant) currentUser;
-            // Check if applicant applied to *this* project and status is relevant (not failed/withdrawn)
             appliedToThis = project.getProjectName().equals(appUser.getAppliedProjectName()) &&
-                            appUser.getApplicationStatus() != null &&
-                            appUser.getApplicationStatus() != ApplicationStatus.UNSUCCESSFUL &&
-                            appUser.getApplicationStatus() != ApplicationStatus.WITHDRAWN;
+                    appUser.getApplicationStatus() != null &&
+                    appUser.getApplicationStatus() != ApplicationStatus.UNSUCCESSFUL &&
+                    appUser.getApplicationStatus() != ApplicationStatus.WITHDRAWN;
         }
 
         boolean isHandlingOfficer = false;
         if (currentUser instanceof HDBOfficer) {
-            // Check registrations service if this officer is approved for this project
-             isHandlingOfficer = officerRegistrationService.getRegistrationsByOfficer(currentUser.getNric())
-                                    .stream()
-                                    .anyMatch(reg -> reg.getProjectName().equals(project.getProjectName()) &&
-                                            reg.getStatus() == OfficerRegistrationStatus.APPROVED);
+            isHandlingOfficer = officerRegistrationService.getRegistrationsByOfficer(currentUser.getNric())
+                    .stream()
+                    .anyMatch(reg -> reg.getProjectName().equals(project.getProjectName()) &&
+                            reg.getStatus() == OfficerRegistrationStatus.APPROVED);
 
         }
 
-        // Visible if globally visible OR user applied OR user is handling officer
         return project.isVisible() || appliedToThis || isHandlingOfficer;
     }
 
-    // Eligibility check remains based on user type, age, marital status
+    /**
+     * Checks if the currently logged-in user is eligible to apply for a specific
+     * flat type based on simplified HDB rules.
+     * - Managers cannot apply.
+     * - Singles (>= 35) can apply for 2-Room.
+     * - Married (>= 21) can apply for 2-Room or 3-Room.
+     * (Other statuses like divorced/widowed are not explicitly handled here).
+     *
+     * @param type The FlatType to check eligibility for.
+     * @return true if the current user meets the basic criteria for the flat type,
+     *         false otherwise.
+     */
     protected boolean canApplyForFlatType(FlatType type) {
-        if (currentUser instanceof HDBManager) return false; // Managers cannot apply
+        if (currentUser instanceof HDBManager)
+            return false;
 
-        // Based on HDB rules (simplified)
         if (currentUser.getMaritalStatus() == MaritalStatus.SINGLE) {
-            // Singles >= 35 can apply for 2-Room Flexi (represented as TWO_ROOM here)
             return currentUser.getAge() >= 35 && type == FlatType.TWO_ROOM;
         } else if (currentUser.getMaritalStatus() == MaritalStatus.MARRIED) {
-            // Married couples >= 21 can apply for 2-Room or 3-Room
             return currentUser.getAge() >= 21 && (type == FlatType.TWO_ROOM || type == FlatType.THREE_ROOM);
         }
-        // Other cases (e.g., divorced, widowed) might have different rules, not covered here
         return false;
     }
 
-    // applyFilters method remains the same, modifying the controller's internal state
+    /**
+     * Prompts the user to enter or clear filters for project location
+     * (neighborhood) and flat type.
+     * Updates the internal `filterLocation` and `filterFlatType` fields of the
+     * controller instance.
+     * These filters are used by
+     * {@link #getFilteredProjects(boolean, boolean, boolean, boolean, boolean)}.
+     */
     public void applyFilters() {
         System.out.println("\n--- Apply/Clear Filters ---");
         System.out.print("Enter neighborhood to filter by (current: "
@@ -193,14 +292,13 @@ public abstract class BaseController {
             filterFlatType = null;
         } else {
             try {
-                FlatType parsedType = FlatType.fromString(typeStr); // Use the enum's parser
+                FlatType parsedType = FlatType.fromString(typeStr);
                 if (parsedType != null) {
                     filterFlatType = parsedType;
                 } else {
                     System.out.println("Invalid flat type entered. Filter not changed.");
                 }
             } catch (IllegalArgumentException e) {
-                // This catch might not be needed if fromString returns null for invalid input
                 System.out.println("Invalid flat type format. Filter not changed.");
             }
         }
@@ -209,7 +307,20 @@ public abstract class BaseController {
                         + ", FlatType=" + (filterFlatType == null ? "Any" : filterFlatType));
     }
 
-    // UI Helper: viewAndSelectProject remains largely the same, but uses canApplyForFlatType
+    /**
+     * Displays a list of projects in a formatted table and prompts the user for
+     * common actions (like selection).
+     * Shows project details including name, neighborhood, dates, visibility, and
+     * flat type information
+     * (available/total units, price).
+     * For Applicants/Officers, it indicates eligibility ("Ineligible", "No Units")
+     * for each flat type.
+     * For Managers/Officers, it shows manager NRIC and officer slot usage.
+     *
+     * @param projectList The list of Project objects to display.
+     * @param prompt      A title string to display above the project list (e.g.,
+     *                    "Select Project to Edit").
+     */
     protected void viewAndSelectProject(List<Project> projectList, String prompt) {
         if (projectList.isEmpty()) {
             System.out.println("No projects match the current criteria.");
@@ -236,22 +347,19 @@ public abstract class BaseController {
                     DateUtils.formatDate(p.getApplicationClosingDate()),
                     p.isVisible() ? "On" : "Off");
 
-            // Generate flat details string including eligibility check
             String flatDetails = p.getFlatTypes().entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey()) // Sort by FlatType enum order
+                    .sorted(Map.Entry.comparingByKey())
                     .map(entry -> {
                         FlatType type = entry.getKey();
                         FlatTypeDetails details = entry.getValue();
                         String eligibilityMark = "";
-                        // Show eligibility only for Applicant/Officer roles
-                        if (currentUser instanceof Applicant) { // Includes HDBOfficer
+                        if (currentUser instanceof Applicant) {
                             if (!canApplyForFlatType(type)) {
                                 eligibilityMark = " (Ineligible)";
-                            } else if (details.getAvailableUnits() <= 0) { // Check non-negative available units
+                            } else if (details.getAvailableUnits() <= 0) {
                                 eligibilityMark = " (No Units)";
                             }
                         }
-                        // Format: TypeName: Avail/Total ($Price) EligibilityMark
                         return String.format("%s: %d/%d ($%.0f)%s",
                                 type.getDisplayName(), details.getAvailableUnits(), details.getTotalUnits(),
                                 details.getSellingPrice(), eligibilityMark);
@@ -259,23 +367,32 @@ public abstract class BaseController {
                     .collect(Collectors.joining(", "));
             System.out.println(flatDetails);
 
-            // Show Manager/Officer info only if user is not just an Applicant
             if (currentUser.getRole() != UserRole.APPLICANT) {
-                 int approvedCount = p.getApprovedOfficerNrics().size(); // Get current count
-                System.out.printf("%-3s %-15s %-12s %-10s %-10s %-8s %-25s\n", "", "", "", "", "", "", // Align under previous line
+                int approvedCount = p.getApprovedOfficerNrics().size();
+                System.out.printf("%-3s %-15s %-12s %-10s %-10s %-8s %-25s\n", "", "", "", "", "", "",
                         "Mgr: " + p.getManagerNric() + ", Officers: " + approvedCount + "/" + p.getMaxOfficerSlots());
             }
-             if (i < projectList.size() - 1)
-                 System.out.println("---"); // Separator between projects
+            if (i < projectList.size() - 1)
+                System.out.println("---");
 
         }
         System.out.println(
                 "--------------------------------------------------------------------------------------------------------------------");
     }
 
-    // UI Helper: selectProjectFromList remains the same
+    /**
+     * Prompts the user to select a project by number from a previously displayed
+     * list.
+     * Handles user input, validates the choice against the list size, and allows
+     * cancellation (input 0).
+     *
+     * @param projectList The list of projects from which the user is selecting.
+     * @return The selected Project object, or null if the user cancels, enters
+     *         invalid input, or the list is empty/null.
+     */
     protected Project selectProjectFromList(List<Project> projectList) {
-        if (projectList == null || projectList.isEmpty()) return null; // Handle empty list case
+        if (projectList == null || projectList.isEmpty())
+            return null;
 
         System.out.print("Enter the number of the project (or 0 to cancel): ");
         int choice;
@@ -285,9 +402,8 @@ public abstract class BaseController {
                 System.out.println("Operation cancelled.");
                 return null;
             }
-            // Validate choice is within the list bounds (1 to list size)
             if (choice >= 1 && choice <= projectList.size()) {
-                return projectList.get(choice - 1); // Adjust for 0-based index
+                return projectList.get(choice - 1);
             } else {
                 System.out.println("Invalid choice number.");
                 return null;
@@ -298,16 +414,24 @@ public abstract class BaseController {
         }
     }
 
-    // UI Helper: getIntInput remains the same
+    /**
+     * Prompts the user for integer input within a specified range.
+     * Reprompts until valid input is received.
+     *
+     * @param prompt The message to display to the user.
+     * @param min    The minimum allowed integer value (inclusive).
+     * @param max    The maximum allowed integer value (inclusive).
+     * @return The validated integer input from the user.
+     */
     protected int getIntInput(String prompt, int min, int max) {
-        int value = -1; // Initialize outside the loop
+        int value = -1;
         while (true) {
-            System.out.print(prompt); // Print the prompt
-            String input = scanner.nextLine(); // Read the whole line
+            System.out.print(prompt);
+            String input = scanner.nextLine();
             try {
                 value = Integer.parseInt(input);
                 if (value >= min && value <= max) {
-                    break; // Valid input, exit loop
+                    break;
                 } else {
                     System.out.println("Input must be between " + min + " and " + max + ".");
                 }
@@ -318,16 +442,24 @@ public abstract class BaseController {
         return value;
     }
 
-    // UI Helper: getDoubleInput remains the same
+    /**
+     * Prompts the user for double (floating-point) input within a specified range.
+     * Reprompts until valid input is received.
+     *
+     * @param prompt The message to display to the user.
+     * @param min    The minimum allowed double value (inclusive).
+     * @param max    The maximum allowed double value (inclusive).
+     * @return The validated double input from the user.
+     */
     protected double getDoubleInput(String prompt, double min, double max) {
-        double value = -1.0; // Initialize outside the loop
+        double value = -1.0;
         while (true) {
-            System.out.print(prompt); // Print the prompt
-            String input = scanner.nextLine(); // Read the whole line
+            System.out.print(prompt);
+            String input = scanner.nextLine();
             try {
                 value = Double.parseDouble(input);
                 if (value >= min && value <= max) {
-                    break; // Valid input, exit loop
+                    break;
                 } else {
                     System.out.println("Input must be between " + min + " and " + max + ".");
                 }
@@ -338,25 +470,33 @@ public abstract class BaseController {
         return value;
     }
 
-    // UI Helper: getDateInput remains the same
+    /**
+     * Prompts the user for date input in "yyyy-MM-dd" format.
+     * Uses {@link Parsers.Dparse} for parsing and validation.
+     * Reprompts until a valid date is entered or if blank input is disallowed.
+     *
+     * @param prompt     The message to display to the user.
+     * @param allowBlank If true, allows the user to press Enter to skip input
+     *                   (returns null). If false, requires valid date input.
+     * @return The validated Date object, or null if blank input is allowed and
+     *         entered.
+     */
     protected Date getDateInput(String prompt, boolean allowBlank) {
         Date date = null;
         while (true) {
-            System.out.print(prompt); // Print the prompt
+            System.out.print(prompt);
             String input = scanner.nextLine().trim();
             if (input.isEmpty() && allowBlank) {
-                return null; // Return null if blank is allowed and input is empty
+                return null;
             }
             if (input.isEmpty() && !allowBlank) {
-                 System.out.println("Input cannot be empty.");
-                 continue; // Ask again if blank is not allowed
+                System.out.println("Input cannot be empty.");
+                continue;
             }
-            // Use the Dparse utility to parse the date
             date = Dparse.parseDate(input);
             if (date != null) {
-                break; // Valid date parsed, exit loop
+                break;
             }
-            // Dparse already prints an error message, so just loop again
         }
         return date;
     }

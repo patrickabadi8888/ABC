@@ -1,3 +1,10 @@
+/**
+ * Controller handling actions performed by an HDB Officer related to managing the flat booking process
+ * for applicants whose applications have been approved (status SUCCESSFUL).
+ * Inherits common functionality from BaseController.
+ *
+ * @author Patrick
+ */
 package Controllers;
 
 import java.util.Comparator;
@@ -19,21 +26,56 @@ import Services.IProjectService;
 import Services.IUserService;
 import Utils.DateUtils;
 
-// Handles Officer actions related to managing flat bookings
 public class BookingOfficerController extends BaseController {
-
+    /**
+     * Constructs a new BookingOfficerController.
+     *
+     * @param userService                Service for user data access.
+     * @param projectService             Service for project data access.
+     * @param applicationService         Service for application data access.
+     * @param officerRegistrationService Service for officer registration data
+     *                                   access.
+     * @param currentUser                The currently logged-in User (expected to
+     *                                   be HDBOfficer).
+     * @param scanner                    Scanner instance for reading user input.
+     * @param authController             Controller for authentication tasks.
+     */
     public BookingOfficerController(IUserService userService, IProjectService projectService,
-                                   IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
-                                   User currentUser, Scanner scanner, AuthController authController) {
-        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner, authController);
+            IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
+            User currentUser, Scanner scanner, AuthController authController) {
+        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner,
+                authController);
     }
 
+    /**
+     * Guides the HDB Officer through the process of booking a flat for a selected
+     * applicant.
+     * - Checks if the officer is currently handling an active project.
+     * - Retrieves and displays applicants for the handling project whose status is
+     * SUCCESSFUL.
+     * - Prompts the officer to select an applicant.
+     * - Performs pre-booking checks:
+     * - Verifies the application status is still SUCCESSFUL.
+     * - Verifies the applicant profile doesn't already show them as BOOKED.
+     * - Verifies the application has a valid flat type specified.
+     * - Checks if units are still available for the applied flat type in the
+     * project.
+     * - Prompts for confirmation.
+     * - If confirmed:
+     * - Decrements the available unit count in the project's FlatTypeDetails.
+     * - Updates the BTOApplication status to BOOKED.
+     * - Updates the Applicant's profile status to BOOKED and sets the
+     * bookedFlatType.
+     * - Generates and displays a booking receipt.
+     * - Saves the updated application, project (due to unit count change), and
+     * potentially user data.
+     */
     public void manageFlatBooking() {
-        if (!(currentUser instanceof HDBOfficer)) return;
+        if (!(currentUser instanceof HDBOfficer))
+            return;
         HDBOfficer officer = (HDBOfficer) currentUser;
 
-        // Find the project the officer is currently handling
-        Project project = getOfficerHandlingProject(officer); // Use BaseController method
+        Project project = getOfficerHandlingProject(officer);
 
         if (project == null) {
             System.out.println("You need to be handling an active project to manage flat bookings.");
@@ -43,11 +85,10 @@ public class BookingOfficerController extends BaseController {
 
         System.out.println("\n--- Flat Booking Management for Project: " + handlingProjectName + " ---");
 
-        // Get applications for this project with SUCCESSFUL status using the service
         List<BTOApplication> successfulApps = applicationService.getApplicationsByProject(handlingProjectName)
                 .stream()
                 .filter(app -> app.getStatus() == ApplicationStatus.SUCCESSFUL)
-                .sorted(Comparator.comparing(app -> app.getApplicationDate())) // Sort by application date (FIFO)
+                .sorted(Comparator.comparing(app -> app.getApplicationDate()))
                 .collect(Collectors.toList());
 
         if (successfulApps.isEmpty()) {
@@ -55,11 +96,10 @@ public class BookingOfficerController extends BaseController {
             return;
         }
 
-        // Display successful applicants for selection
         System.out.println("Applicants with SUCCESSFUL status (ready for booking):");
         for (int i = 0; i < successfulApps.size(); i++) {
             BTOApplication app = successfulApps.get(i);
-            User applicantUser = userService.findUserByNric(app.getApplicantNric()); // Find user via service
+            User applicantUser = userService.findUserByNric(app.getApplicantNric());
             System.out.printf("%d. NRIC: %s | Name: %-15s | Applied Type: %-8s | App Date: %s\n",
                     i + 1,
                     app.getApplicantNric(),
@@ -68,8 +108,8 @@ public class BookingOfficerController extends BaseController {
                     DateUtils.formatDate(app.getApplicationDate()));
         }
 
-        // Prompt for selection
-        int choice = getIntInput("Enter the number of the applicant to process booking for (or 0 to cancel): ", 0, successfulApps.size());
+        int choice = getIntInput("Enter the number of the applicant to process booking for (or 0 to cancel): ", 0,
+                successfulApps.size());
 
         if (choice == 0) {
             System.out.println("Operation cancelled.");
@@ -79,54 +119,46 @@ public class BookingOfficerController extends BaseController {
         BTOApplication applicationToBook = successfulApps.get(choice - 1);
         User applicantUser = userService.findUserByNric(applicationToBook.getApplicantNric());
 
-        // Validate applicant data
         if (!(applicantUser instanceof Applicant)) {
             System.out.println(
-                    "Error: Applicant data not found or invalid for NRIC " + applicationToBook.getApplicantNric() + ". Cannot process booking.");
+                    "Error: Applicant data not found or invalid for NRIC " + applicationToBook.getApplicantNric()
+                            + ". Cannot process booking.");
             return;
         }
         Applicant applicant = (Applicant) applicantUser;
 
-        // --- Pre-booking Checks ---
-        // Re-check application status (in case it changed since listing)
-        // Refresh application object from service? Might be overkill if sync is frequent. Check current object's status.
         if (applicationToBook.getStatus() != ApplicationStatus.SUCCESSFUL) {
             System.out.println("Error: Applicant status is no longer SUCCESSFUL (Current: "
                     + applicationToBook.getStatus() + "). Cannot proceed with booking.");
             return;
         }
-        // Check applicant profile status (redundant if sync works, but safe)
         if (applicant.hasBooked()) {
             System.out.println("Error: Applicant " + applicant.getNric()
                     + " has already booked a flat according to their profile. Booking cancelled.");
             return;
         }
-        // Check flat type applied for
         FlatType appliedFlatType = applicationToBook.getFlatTypeApplied();
         if (appliedFlatType == null) {
             System.out.println("Error: Application record does not have a valid flat type specified. Cannot book.");
             return;
         }
-        // Check unit availability using the *mutable* details from the Project object
-        // Need to get the project object again as the one from getOfficerHandlingProject might be stale if units changed.
         Project currentProjectState = projectService.findProjectByName(handlingProjectName);
         if (currentProjectState == null) {
-             System.out.println("Error: Could not retrieve current project state. Booking cancelled.");
-             return;
+            System.out.println("Error: Could not retrieve current project state. Booking cancelled.");
+            return;
         }
         FlatTypeDetails details = currentProjectState.getMutableFlatTypeDetails(appliedFlatType);
         if (details == null) {
-             System.out.println("Error: Flat type details not found for " + appliedFlatType.getDisplayName() + " in project " + currentProjectState.getProjectName() +". Cannot book.");
-             return;
+            System.out.println("Error: Flat type details not found for " + appliedFlatType.getDisplayName()
+                    + " in project " + currentProjectState.getProjectName() + ". Cannot book.");
+            return;
         }
         if (details.getAvailableUnits() <= 0) {
             System.out.println("Error: No available units for the applied flat type ("
                     + appliedFlatType.getDisplayName() + ") at this moment. Booking cannot proceed.");
-            // Consider suggesting checking back later or informing manager?
             return;
         }
 
-        // --- Confirmation ---
         System.out.println("\n--- Confirm Booking ---");
         System.out.println("Applicant: " + applicant.getName() + " (" + applicant.getNric() + ")");
         System.out.println("Project: " + applicationToBook.getProjectName());
@@ -138,44 +170,45 @@ public class BookingOfficerController extends BaseController {
         String confirm = scanner.nextLine().trim().toLowerCase();
 
         if (confirm.equals("yes")) {
-            // --- Process Booking ---
-            // 1. Decrement available units in the Project's FlatTypeDetails
             if (!details.decrementAvailableUnits()) {
-                // This could happen in a concurrent scenario, or if the check above was somehow bypassed.
                 System.out.println(
                         "Error: Failed to decrement unit count (Units might have just become zero). Booking cancelled.");
                 return;
             }
 
-            // 2. Update BTOApplication status
             applicationToBook.setStatus(ApplicationStatus.BOOKED);
 
-            // 3. Update Applicant status and booked flat type
             applicant.setApplicationStatus(ApplicationStatus.BOOKED);
             applicant.setBookedFlatType(appliedFlatType);
 
-            // --- Post-booking Actions ---
             System.out.println("Booking confirmed successfully!");
             System.out.println("Applicant status updated to BOOKED.");
-            System.out.println("Remaining units for " + appliedFlatType.getDisplayName() + ": " + details.getAvailableUnits());
+            System.out.println(
+                    "Remaining units for " + appliedFlatType.getDisplayName() + ": " + details.getAvailableUnits());
 
-            // Generate receipt (uses current user NRIC as Officer NRIC)
-            generateBookingReceipt(applicant, applicationToBook, currentProjectState); // Pass the up-to-date project state
+            generateBookingReceipt(applicant, applicationToBook, currentProjectState);
 
-            // Save updated data
             applicationService.saveApplications(applicationService.getAllApplications());
-            projectService.saveProjects(projectService.getAllProjects()); // Save project because unit count changed
-            // userService.saveUsers(userService.getAllUsers()); // Save user state change
+            projectService.saveProjects(projectService.getAllProjects());
 
         } else {
             System.out.println("Booking cancelled.");
         }
     }
 
-    // generateBookingReceipt remains a private helper method within this controller
+    /**
+     * Generates and displays a booking receipt for the applicant.
+     * Displays the applicant's details, project details, and booking status.
+     * 
+     * @param applicant   The applicant whose booking receipt is being generated.
+     * @param application The BTOApplication associated with the booking.
+     * @param project     The project associated with the booking.
+     */
+
     private void generateBookingReceipt(Applicant applicant, BTOApplication application, Project project) {
         System.out.println("\n================ BTO Booking Receipt ================");
-        System.out.println(" Receipt Generated: " + DateUtils.formatDate(DateUtils.getCurrentDate()) + " by Officer " + currentUser.getNric());
+        System.out.println(" Receipt Generated: " + DateUtils.formatDate(DateUtils.getCurrentDate()) + " by Officer "
+                + currentUser.getNric());
         System.out.println("-----------------------------------------------------");
         System.out.println(" Applicant Details:");
         System.out.println("   Name:          " + applicant.getName());
@@ -186,15 +219,16 @@ public class BookingOfficerController extends BaseController {
         System.out.println(" Booking Details:");
         System.out.println("   Project Name:  " + project.getProjectName());
         System.out.println("   Neighborhood:  " + project.getNeighborhood());
-        System.out.println("   Booked Flat:   " + (application.getFlatTypeApplied() != null ? application.getFlatTypeApplied().getDisplayName() : "N/A"));
-        // Get price from the project details passed in
+        System.out.println("   Booked Flat:   "
+                + (application.getFlatTypeApplied() != null ? application.getFlatTypeApplied().getDisplayName()
+                        : "N/A"));
         FlatTypeDetails details = project.getFlatTypeDetails(application.getFlatTypeApplied());
         if (details != null) {
             System.out.printf("   Selling Price: $%.2f\n", details.getSellingPrice());
         } else {
-            System.out.println("   Selling Price: N/A"); // Should not happen if booking succeeded
+            System.out.println("   Selling Price: N/A");
         }
-        System.out.println("   Booking Status:" + application.getStatus()); // Should be BOOKED
+        System.out.println("   Booking Status:" + application.getStatus());
         System.out.println("   Application ID:" + application.getApplicationId());
         System.out.println("-----------------------------------------------------");
         System.out.println(" Thank you for choosing HDB!");

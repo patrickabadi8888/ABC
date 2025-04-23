@@ -5,8 +5,6 @@ def find_java_files_with_contents(start_directory):
     files_info = []
     for root, _, files in os.walk(start_directory):
         for fname in files:
-            if not('Controllers' in root or 'Services' in root or 'Views' in root or 'BTOApp.java' in fname):
-                continue
             if fname.endswith('.java'):
                 path = os.path.join(root, fname)
                 rel = os.path.relpath(path, start_directory)

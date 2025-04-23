@@ -1,3 +1,10 @@
+/**
+ * View component responsible for displaying the menu and handling input for the HDB Officer role.
+ * Interacts with the {@link Controllers.OfficerController} to execute actions.
+ * Includes both officer-specific actions and inherited applicant actions.
+ *
+ * @author Jun Yang
+ */
 package Views;
 
 import Controllers.OfficerController;
@@ -9,6 +16,15 @@ import Models.HDBOfficer;
 import java.util.Scanner;
 
 public class OfficerView extends BaseView {
+    /**
+     * Constructs a new OfficerView.
+     *
+     * @param scanner        Scanner instance for reading user input.
+     * @param currentUser    The currently logged-in User (expected to be
+     *                       HDBOfficer).
+     * @param controller     The OfficerController associated with this view.
+     * @param authController Controller for authentication tasks.
+     */
     private final OfficerController officerController;
 
     public OfficerView(Scanner scanner, User currentUser, OfficerController controller, AuthController authController) {
@@ -16,17 +32,29 @@ public class OfficerView extends BaseView {
         this.officerController = controller;
     }
 
+    /**
+     * Displays the main menu for the HDB Officer role.
+     * Shows the currently handled project (if any).
+     * Presents options for officer actions (registration, viewing status/details,
+     * managing enquiries/bookings),
+     * inherited applicant actions (viewing/applying for projects, managing own
+     * applications/enquiries),
+     * common actions (filters, password change), and logging out.
+     * Reads user input and calls the corresponding methods on the OfficerController
+     * or BaseView helpers.
+     * Loops until the user chooses to logout.
+     */
     @Override
     public void displayMenu() {
         boolean logout = false;
         while (!logout) {
             System.out.println("\n=========== HDB Officer Menu ===========");
             System.out.println("Welcome, Officer " + currentUser.getName() + "!");
-            Project handlingProject = officerController.getOfficerHandlingProject((HDBOfficer)currentUser);
+            Project handlingProject = officerController.getOfficerHandlingProject((HDBOfficer) currentUser);
             if (handlingProject != null) {
-                 System.out.println("--> Currently Handling Project: " + handlingProject.getProjectName() + " <--");
+                System.out.println("--> Currently Handling Project: " + handlingProject.getProjectName() + " <--");
             } else {
-                 System.out.println("--> Not currently handling any project <--");
+                System.out.println("--> Not currently handling any project <--");
             }
             System.out.println("--- Officer Actions ---");
             System.out.println(" 1. Register to Handle Project");
@@ -52,20 +80,48 @@ public class OfficerView extends BaseView {
             int choice = getMenuChoice(0, 15);
 
             switch (choice) {
-                case 1: officerController.registerForProject(); break;
-                case 2: officerController.viewRegistrationStatus(); break;
-                case 3: officerController.viewHandlingProjectDetails(); break;
-                case 4: officerController.viewAndReplyToEnquiries(); break;
-                case 5: officerController.manageFlatBooking(); break;
-                case 6: officerController.viewOpenProjects(); break;
-                case 7: officerController.applyForProject(); break;
-                case 8: officerController.viewMyApplication(); break;
-                case 9: officerController.requestWithdrawal(); break;
-                case 10: officerController.submitEnquiry(); break;
-                case 11: officerController.viewMyEnquiries(); break;
-                case 12: officerController.editMyEnquiry(); break;
-                case 13: officerController.deleteMyEnquiry(); break;
-                case 14: applyFilters(); break;
+                case 1:
+                    officerController.registerForProject();
+                    break;
+                case 2:
+                    officerController.viewRegistrationStatus();
+                    break;
+                case 3:
+                    officerController.viewHandlingProjectDetails();
+                    break;
+                case 4:
+                    officerController.viewAndReplyToEnquiries();
+                    break;
+                case 5:
+                    officerController.manageFlatBooking();
+                    break;
+                case 6:
+                    officerController.viewOpenProjects();
+                    break;
+                case 7:
+                    officerController.applyForProject();
+                    break;
+                case 8:
+                    officerController.viewMyApplication();
+                    break;
+                case 9:
+                    officerController.requestWithdrawal();
+                    break;
+                case 10:
+                    officerController.submitEnquiry();
+                    break;
+                case 11:
+                    officerController.viewMyEnquiries();
+                    break;
+                case 12:
+                    officerController.editMyEnquiry();
+                    break;
+                case 13:
+                    officerController.deleteMyEnquiry();
+                    break;
+                case 14:
+                    applyFilters();
+                    break;
                 case 15:
                     if (changePassword()) {
                         logout = true;
@@ -75,11 +131,13 @@ public class OfficerView extends BaseView {
                     logout = true;
                     System.out.println("Logging out...");
                     break;
-                default: System.out.println("Invalid choice."); break;
+                default:
+                    System.out.println("Invalid choice.");
+                    break;
             }
-             if (!logout && choice != 0) {
-                 pause();
-             }
+            if (!logout && choice != 0) {
+                pause();
+            }
         }
     }
 }

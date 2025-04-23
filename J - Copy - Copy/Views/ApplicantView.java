@@ -1,5 +1,11 @@
-package Views;
+/**
+ * View component responsible for displaying the menu and handling input for the Applicant role.
+ * Interacts with the {@link Controllers.ApplicantController} to execute actions.
+ *
+ * @author Jun Yang
+ */
 
+package Views;
 
 import java.util.Scanner;
 import Models.User;
@@ -7,15 +13,33 @@ import Models.User;
 import Controllers.ApplicantController;
 import Controllers.AuthController;
 
-
 public class ApplicantView extends BaseView {
+    /**
+     * Constructs a new ApplicantView.
+     *
+     * @param scanner        Scanner instance for reading user input.
+     * @param currentUser    The currently logged-in User (expected to be
+     *                       Applicant).
+     * @param controller     The ApplicantController associated with this view.
+     * @param authController Controller for authentication tasks.
+     */
     private final ApplicantController applicantController;
 
-    public ApplicantView(Scanner scanner, User currentUser, ApplicantController controller, AuthController authController) {
+    public ApplicantView(Scanner scanner, User currentUser, ApplicantController controller,
+            AuthController authController) {
         super(scanner, currentUser, controller, authController);
         this.applicantController = controller;
     }
 
+    /**
+     * Displays the main menu for the Applicant role.
+     * Presents options for viewing/applying for projects, managing applications and
+     * enquiries,
+     * applying filters, changing password, and logging out.
+     * Reads user input and calls the corresponding methods on the
+     * ApplicantController or BaseView helpers.
+     * Loops until the user chooses to logout.
+     */
     @Override
     public void displayMenu() {
         boolean logout = false;
@@ -38,15 +62,33 @@ public class ApplicantView extends BaseView {
             int choice = getMenuChoice(0, 10);
 
             switch (choice) {
-                case 1: applicantController.viewOpenProjects(); break;
-                case 2: applicantController.applyForProject(); break;
-                case 3: applicantController.viewMyApplication(); break;
-                case 4: applicantController.requestWithdrawal(); break;
-                case 5: applicantController.submitEnquiry(); break;
-                case 6: applicantController.viewMyEnquiries(); break;
-                case 7: applicantController.editMyEnquiry(); break;
-                case 8: applicantController.deleteMyEnquiry(); break;
-                case 9: applyFilters(); break;
+                case 1:
+                    applicantController.viewOpenProjects();
+                    break;
+                case 2:
+                    applicantController.applyForProject();
+                    break;
+                case 3:
+                    applicantController.viewMyApplication();
+                    break;
+                case 4:
+                    applicantController.requestWithdrawal();
+                    break;
+                case 5:
+                    applicantController.submitEnquiry();
+                    break;
+                case 6:
+                    applicantController.viewMyEnquiries();
+                    break;
+                case 7:
+                    applicantController.editMyEnquiry();
+                    break;
+                case 8:
+                    applicantController.deleteMyEnquiry();
+                    break;
+                case 9:
+                    applyFilters();
+                    break;
                 case 10:
                     if (changePassword()) {
                         logout = true;
@@ -56,12 +98,13 @@ public class ApplicantView extends BaseView {
                     logout = true;
                     System.out.println("Logging out...");
                     break;
-                default: System.out.println("Invalid choice."); break;
+                default:
+                    System.out.println("Invalid choice.");
+                    break;
             }
-             if (!logout && choice != 0) {
-                 pause();
-             }
+            if (!logout && choice != 0) {
+                pause();
+            }
         }
     }
 }
-

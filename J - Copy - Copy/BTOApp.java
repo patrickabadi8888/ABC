@@ -1,3 +1,13 @@
+
+/**
+ * Main application class for the BTO Management System.
+ * Initializes services, loads data, handles the main login loop,
+ * instantiates appropriate controllers and views based on user role,
+ * and manages application shutdown.
+ *
+ * @author Patrick
+ */
+
 import java.util.Scanner;
 
 import Models.User;
@@ -12,7 +22,6 @@ import Views.ManagerView;
 
 public class BTOApp {
 
-    // ... (service declarations remain the same) ...
     private IUserService userService;
     private IProjectService projectService;
     private IApplicationService applicationService;
@@ -22,9 +31,15 @@ public class BTOApp {
     private AuthController authController;
     private Scanner scanner;
 
+    /**
+     * Constructs the BTOApp instance.
+     * Initializes the Scanner and instantiates all the necessary service
+     * implementations
+     * (UserService, ProjectService, ApplicationService, EnquiryService,
+     * OfficerRegistrationService).
+     */
     public BTOApp() {
         scanner = new Scanner(System.in);
-        // Instantiate services here
         userService = new UserService();
         projectService = new ProjectService();
         applicationService = new ApplicationService();
@@ -32,62 +47,56 @@ public class BTOApp {
         officerRegistrationService = new OfficerRegistrationService();
     }
 
+    /**
+     * Initializes the application by loading data from persistent storage (CSV
+     * files)
+     */
     public void initialize() {
         System.out.println("Initializing BTO Management System...");
 
-        // --- Load Data ---
-        // Load users first (needed by others)
         System.out.println("Loading users...");
-        userService.loadUsers(); // Loads data into the userService instance
+        userService.loadUsers();
 
-        // Load projects (needs users for validation)
         System.out.println("Loading projects...");
-        projectService.loadProjects(userService.getAllUsers()); // Loads data into projectService
+        projectService.loadProjects(userService.getAllUsers());
 
-        // Load applications (needs projects for unit adjustment/validation)
         System.out.println("Loading applications...");
-        applicationService.loadApplications(projectService.getAllProjects()); // Loads data into applicationService
+        applicationService.loadApplications(projectService.getAllProjects());
 
-        // Load officer registrations (needs users and projects for validation)
         System.out.println("Loading officer registrations...");
-        officerRegistrationService.loadOfficerRegistrations(userService.getAllUsers(), projectService.getAllProjects()); // Loads data into officerRegService
+        officerRegistrationService.loadOfficerRegistrations(userService.getAllUsers(), projectService.getAllProjects());
 
-        // Load enquiries (no explicit dependencies listed for loading)
         System.out.println("Loading enquiries...");
-        enquiryService.loadEnquiries(); // Loads data into enquiryService
+        enquiryService.loadEnquiries();
 
-        // --- Synchronize Data (Optional cross-checks/updates after loading) ---
         System.out.println("Performing data synchronization...");
         DataService.synchronizeData(userService, projectService, applicationService, officerRegistrationService);
 
-        // --- Initialize Authentication ---
-        // AuthController needs userService, which should now be populated
         authController = new AuthController(userService);
 
         System.out.println("Initialization complete. System ready.");
     }
 
-    // ... (run(), loginScreen(), showRoleMenu(), main() remain the same) ...
-     public void run() {
+    /**
+     * Runs the main application loop.
+     * Continuously prompts the user to log in via {@link #loginScreen()}.
+     * If login is successful, it calls {@link #showRoleMenu(User)} to display the
+     * appropriate menu.
+     * After logout, it returns to the login screen or exits if the user chooses not
+     * to retry after a failed login.
+     * Includes a call to DataService.synchronizeData before each login attempt
+     * (consider if this frequency is necessary).
+     */
+    public void run() {
         User currentUser = null;
         while (true) {
-            // Synchronization before *each* login might be excessive,
-            // but can help if data files are modified externally.
-            // Consider if sync is only needed after specific actions or at start/end.
-            // For now, keeping it as it was.
             DataService.synchronizeData(userService, projectService, applicationService, officerRegistrationService);
 
             currentUser = loginScreen();
 
             if (currentUser != null) {
                 showRoleMenu(currentUser);
-                // Reset user and filters after logout
                 currentUser = null;
-                // Resetting filters might be desired depending on requirements
-                // Example: if BaseController had a resetFilters() method:
-                // applicantController.resetFilters(); // Assuming controllers exist
-                // officerController.resetFilters();
-                // managerController.resetFilters();
                 System.out.println("\nReturning to Login Screen...");
             } else {
                 System.out.print("Login failed. Try again? (yes/no): ");
@@ -99,6 +108,15 @@ public class BTOApp {
         }
     }
 
+    /**
+     * Handles the user interface for logging in.
+     * Prompts the user for NRIC and password.
+     * Calls the {@link Controllers.AuthController#login(String, String)} method to
+     * authenticate the user.
+     * Prints success or failure messages.
+     *
+     * @return The authenticated User object if login is successful, null otherwise.
+     */
     private User loginScreen() {
         System.out.println("\n--- BTO Management System Login ---");
         System.out.print("Enter NRIC: ");
@@ -113,11 +131,16 @@ public class BTOApp {
         return user;
     }
 
+    /**
+     * Instantiates the appropriate main controller and view based on the logged-in
+     * user's role.
+     * Calls the `displayMenu()` method of the created view to show the
+     * role-specific options.
+     *
+     * @param user The currently logged-in User object.
+     */
     private void showRoleMenu(User user) {
         BaseView view;
-        // Create controllers *inside* this method or pass them down,
-        // ensuring they use the *current* logged-in user.
-        // The current structure creates controllers here, which is fine.
 
         switch (user.getRole()) {
             case APPLICANT:
@@ -140,27 +163,34 @@ public class BTOApp {
                 break;
             default:
                 System.err.println("FATAL Error: Unknown user role encountered: " + user.getRole());
-                return; // Exit if role is unknown
+                return;
         }
-        view.displayMenu(); // Display the menu for the logged-in user
+        view.displayMenu();
     }
 
-     public static void main(String[] args) {
+    /**
+     * The main entry point of the BTO Management System application.
+     * Creates an instance of BTOApp, initializes it (loads data), and runs the main
+     * loop.
+     * Includes basic error handling for unexpected exceptions during execution.
+     * Ensures the scanner is closed upon termination.
+     *
+     * @param args Command line arguments (not used).
+     */
+    public static void main(String[] args) {
         BTOApp app = new BTOApp();
         try {
-            app.initialize(); // Initialize loads data
-            app.run(); // Run handles login loop and menus
+            app.initialize();
+            app.run();
         } catch (Exception e) {
             System.err.println("An unexpected error occurred: " + e.getMessage());
-            e.printStackTrace(); // Print stack trace for debugging
-            // Attempt to save data even if an error occurred during run()
+            e.printStackTrace();
         } finally {
-             // Ensure scanner is closed
-             if (app.scanner != null) {
-                 app.scanner.close();
-             }
+            if (app.scanner != null) {
+                app.scanner.close();
+            }
         }
         System.out.println("Application terminated.");
-        System.exit(1); // Exit with a non-zero code to indicate an issue occurred if caught exception
+        System.exit(1);
     }
 }
