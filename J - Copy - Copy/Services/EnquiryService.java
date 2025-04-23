@@ -28,23 +28,10 @@ public class EnquiryService implements IEnquiryService {
             "ReplyText", "RepliedByNRIC", "EnquiryDate", "ReplyDate" };
 
     private List<Enquiry> enquiries;
-
-    /**
-     * Constructs a new EnquiryService. Initializes the internal enquiry list.
-     */
     public EnquiryService() {
         this.enquiries = new ArrayList<>();
     }
 
-    /**
-     * Loads enquiry data from enquiries.csv.
-     * Validates enquiry IDs (uniqueness), dates, and required fields (text, date).
-     * Updates the static `nextId` in the Enquiry class based on loaded IDs to
-     * ensure future generated IDs are unique.
-     * Populates the internal enquiry list.
-     *
-     * @return A copy of the list containing all loaded enquiries.
-     */
     @Override
     public List<Enquiry> loadEnquiries() {
         this.enquiries.clear();
@@ -93,14 +80,6 @@ public class EnquiryService implements IEnquiryService {
         return new ArrayList<>(this.enquiries);
     }
 
-    /**
-     * Saves the provided list of enquiries to enquiries.csv.
-     * Formats enquiry data, including handling null reply fields, for CSV storage.
-     * Overwrites the existing file. Updates the internal enquiry list to match the
-     * saved state.
-     *
-     * @param enquiriesToSave The list of Enquiry objects to save.
-     */
     @Override
     public void saveEnquiries(List<Enquiry> enquiriesToSave) {
         List<String[]> dataList = new ArrayList<>();
@@ -124,13 +103,6 @@ public class EnquiryService implements IEnquiryService {
         this.enquiries = new ArrayList<>(enquiriesToSave);
     }
 
-    /**
-     * Adds a new enquiry to the internal list if an enquiry with the same ID
-     * doesn't already exist.
-     * Prints an error message if a duplicate ID is detected.
-     *
-     * @param enquiry The Enquiry object to add.
-     */
     @Override
     public void addEnquiry(Enquiry enquiry) {
         if (enquiry != null && findEnquiryById(enquiry.getEnquiryId()) == null) {
@@ -140,14 +112,6 @@ public class EnquiryService implements IEnquiryService {
         }
     }
 
-    /**
-     * Removes an enquiry from the internal list based on its ID.
-     *
-     * @param enquiryId The ID of the enquiry to remove. If null, the method does
-     *                  nothing.
-     * @return true if an enquiry with the matching ID was found and removed, false
-     *         otherwise.
-     */
     @Override
     public boolean removeEnquiry(String enquiryId) {
         if (enquiryId != null) {
@@ -156,12 +120,6 @@ public class EnquiryService implements IEnquiryService {
         return false;
     }
 
-    /**
-     * Finds an enquiry by its unique ID from the internally managed list.
-     *
-     * @param enquiryId The ID of the enquiry to find.
-     * @return The Enquiry object if found, or null if the ID is null or not found.
-     */
     @Override
     public Enquiry findEnquiryById(String enquiryId) {
         if (enquiryId == null)
@@ -172,14 +130,6 @@ public class EnquiryService implements IEnquiryService {
                 .orElse(null);
     }
 
-    /**
-     * Retrieves a list of all enquiries submitted by a specific applicant.
-     * Filters the internal enquiry list based on the applicantNric field.
-     *
-     * @param applicantNric The NRIC of the applicant.
-     * @return A list of Enquiry objects submitted by the specified applicant.
-     *         Returns an empty list if NRIC is null or no enquiries are found.
-     */
     @Override
     public List<Enquiry> getEnquiriesByApplicant(String applicantNric) {
         if (applicantNric == null)
@@ -189,14 +139,6 @@ public class EnquiryService implements IEnquiryService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Retrieves a list of all enquiries associated with a specific project.
-     * Filters the internal enquiry list based on the projectName field.
-     *
-     * @param projectName The name of the project.
-     * @return A list of Enquiry objects for the specified project. Returns an empty
-     *         list if projectName is null or no enquiries are found.
-     */
     @Override
     public List<Enquiry> getEnquiriesByProject(String projectName) {
         if (projectName == null)
@@ -206,13 +148,6 @@ public class EnquiryService implements IEnquiryService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Retrieves a copy of the list containing all enquiries currently managed by
-     * the service.
-     * Returning a copy prevents external modification of the internal state.
-     *
-     * @return A new ArrayList containing all Enquiry objects.
-     */
     @Override
     public List<Enquiry> getAllEnquiries() {
         return new ArrayList<>(this.enquiries);
