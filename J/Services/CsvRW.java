@@ -117,7 +117,7 @@ public class CsvRW {
              try (BufferedWriter bw = Files.newBufferedWriter(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 for (String[] row : data) {
                     String line = Arrays.stream(row)
-                                        .map(CsvRW::escapeCsvField)
+                                        .map(field -> CsvRW.escapeCsvField(field))
                                         .collect(Collectors.joining(DELIMITER));
                     bw.write(line);
                     bw.newLine();

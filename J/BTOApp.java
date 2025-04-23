@@ -118,29 +118,12 @@ public class BTOApp {
         view.displayMenu();
     }
 
-    public void shutdown() {
-        System.out.println("\nShutting down BTO Management System...");
-        if (scanner != null) {
-            try {
-                scanner.close();
-                 System.out.println("Scanner closed.");
-            } catch (IllegalStateException e) {
-            }
-        }
-        System.out.println("System shutdown complete.");
-    }
-
-
     public static void main(String[] args) {
         BTOApp app = new BTOApp();
         try {
-            Runtime.getRuntime().addShutdownHook(new Thread(app::shutdown, "Shutdown-Thread"));
-
-
             app.initialize();
 
             app.run();
-
         } catch (Exception e) {
              System.err.println("An unexpected critical error occurred in the main application thread: " + e.getMessage());
              e.printStackTrace();

@@ -63,7 +63,7 @@ public class EnquiryService {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(ENQUIRY_HEADER);
         enquiries.stream()
-            .sorted(Comparator.comparing(Enquiry::getEnquiryId))
+            .sorted(Comparator.comparing(enquiry -> enquiry.getEnquiryId()))
             .forEach(enq -> {
                 dataList.add(new String[]{
                     enq.getEnquiryId(),

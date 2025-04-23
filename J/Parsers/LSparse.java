@@ -16,7 +16,8 @@ public class LSparse {
             effectiveList = effectiveList.substring(1, effectiveList.length() - 1).replace("\"\"", "\"");
         }
         return Arrays.stream(effectiveList.split(LIST_DELIMITER))
-                     .map(String::trim)
+        .map(str -> str.trim())
+        
                      .filter(s -> !s.isEmpty())
                      .collect(Collectors.toList());
     }

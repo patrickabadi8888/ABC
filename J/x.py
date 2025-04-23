@@ -23,6 +23,7 @@ def write_summary(files_info, output_path):
     with open(output_path, 'w', encoding='utf-8') as out:
         for rel_path, count, contents in files_info:
             out.write(f"{rel_path} ({count})\n")
+            print(f"{rel_path} ({count})")
             out.write("```java\n")
             out.write(contents)
             # ensure there's a trailing newline before closing the fence

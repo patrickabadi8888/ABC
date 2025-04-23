@@ -68,7 +68,7 @@ public class OfficerRegistrationService {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(OFFICER_REGISTRATION_HEADER);
         registrations.values().stream()
-            .sorted(Comparator.comparing(OfficerRegistration::getRegistrationId))
+            .sorted(Comparator.comparing(officer -> officer.getRegistrationId()))
             .forEach(reg -> {
                 dataList.add(new String[]{
                     reg.getRegistrationId(),
