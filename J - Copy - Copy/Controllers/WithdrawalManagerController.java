@@ -1,10 +1,3 @@
-/**
- * Controller handling actions performed by an HDB Manager related to managing
- * BTO application withdrawal requests (status PENDING_WITHDRAWAL) for projects they manage.
- * Inherits common functionality from BaseController.
- *
- * @author Jordon
- */
 package Controllers;
 
 import java.util.Comparator;
@@ -29,20 +22,6 @@ import Utils.DateUtils;
 
 
 public class WithdrawalManagerController extends BaseController {
-/**
- * Constructs a new WithdrawalManagerController.
- * Ensures the current user is an HDBManager.
- *
- * @param userService Service for user data access.
- * @param projectService Service for project data access.
- * @param applicationService Service for application data access.
- * @param officerRegistrationService Service for officer registration data access.
- * @param enquiryService Service for enquiry data access.
- * @param currentUser The currently logged-in User (must be HDBManager).
- * @param scanner Scanner instance for reading user input.
- * @param authController Controller for authentication tasks.
- * @throws IllegalArgumentException if the currentUser is not an HDBManager.
- */
     public WithdrawalManagerController(IUserService userService, IProjectService projectService,
                                    IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
                                    IEnquiryService enquiryService,
@@ -52,25 +31,7 @@ public class WithdrawalManagerController extends BaseController {
             throw new IllegalArgumentException("WithdrawalManagerController requires an HDBManager user.");
         }
     }
-/**
- * Guides the HDB Manager through approving or rejecting pending withdrawal requests for applications in their managed projects.
- * - Finds all applications with status PENDING_WITHDRAWAL for projects managed by the current manager.
- * - Displays these pending requests, showing applicant details and the inferred original status before withdrawal.
- * - Prompts the manager to select a request to process.
- * - Validates applicant and project data.
- * - Determines the original status (using stored value if available, otherwise inferring).
- * - Verifies the application is still in PENDING_WITHDRAWAL status.
- * - Prompts for Approve (A) or Reject (R) action.
- * - If Approve:
- *   - Determines the final status based on the original status (UNSUCCESSFUL if originally BOOKED/SUCCESSFUL, WITHDRAWN if originally PENDING).
- *   - If originally BOOKED, attempts to release the flat unit back to the project by incrementing available units in FlatTypeDetails.
- *   - Updates the application status to the final determined status.
- *   - Updates the applicant's profile status and clears their booked flat type.
- *   - Saves application data, and project data if a unit was released.
- * - If Reject:
- *   - Reverts the application status and the applicant's profile status back to the original status determined earlier.
- *   - Saves the application data.
- */
+
      public void manageWithdrawalRequests() {
         System.out.println("\n--- Manage Withdrawal Requests ---");
         List<String> myProjectNames = projectService.getProjectsManagedBy(currentUser.getNric())
@@ -209,18 +170,6 @@ public class WithdrawalManagerController extends BaseController {
         }
     }
 
-    /**
-     * Infers the application status before withdrawal based on the current application and applicant data.
-     *
-     * @param app The BTOApplication object representing the application.
-     * @param applicant The Applicant object representing the applicant.
-     * @return The inferred ApplicationStatus before withdrawal.
-     */
-    /** 
-     * @param app
-     * @param applicant
-     * @return
-     */
     private ApplicationStatus inferStatusBeforeWithdrawal(BTOApplication app, Applicant applicant) {
          if (applicant != null && applicant.hasBooked() && applicant.getBookedFlatType() == app.getFlatTypeApplied()) {
              return ApplicationStatus.BOOKED;
