@@ -1,0 +1,3 @@
+EnquiryID,ApplicantNRIC,ProjectName,EnquiryText,ReplyText,RepliedByNRIC,EnquiryDate,ReplyDate
+ENQ2,T2121212G,Acacia 02,Hello1,DSA,T2121212O,2025-04-23,2025-04-23
+ENQ3,T2121212G,Acacia 02,Hello2,ASD,T2525252M,2025-04-23,2025-04-23
