@@ -20,7 +20,7 @@ public class NricValidator {
      * @return true if the string matches the NRIC pattern, false otherwise
      *         (including if the input is null).
      */
-    public static boolean isValidNric(String var0) {
-        return var0 == null ? false : NRIC_PATTERN.matcher(var0).matches();
+    public static boolean isValidNric(String nric) {
+        return nric == null ? false : NRIC_PATTERN.matcher(nric).matches();
     }
 }

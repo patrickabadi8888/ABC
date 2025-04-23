@@ -105,9 +105,9 @@ public class OfficerRegistration {
     }
 
     /**
-     * Sets the status of the registration.
+     * Gets the date the registration was submitted.
      *
-     * @param status The registration status enum. Cannot be null.
+     * @return The registration date.
      */
     public Date getRegistrationDate() {
         return registrationDate;

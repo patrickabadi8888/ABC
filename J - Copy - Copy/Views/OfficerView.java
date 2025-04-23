@@ -16,6 +16,8 @@ import Models.HDBOfficer;
 import java.util.Scanner;
 
 public class OfficerView extends BaseView {
+    private final OfficerController officerController;
+    
     /**
      * Constructs a new OfficerView.
      *
@@ -25,8 +27,6 @@ public class OfficerView extends BaseView {
      * @param controller     The OfficerController associated with this view.
      * @param authController Controller for authentication tasks.
      */
-    private final OfficerController officerController;
-
     public OfficerView(Scanner scanner, User currentUser, OfficerController controller, AuthController authController) {
         super(scanner, currentUser, controller, authController);
         this.officerController = controller;

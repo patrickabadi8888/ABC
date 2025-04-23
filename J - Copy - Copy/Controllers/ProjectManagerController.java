@@ -34,21 +34,6 @@ import Services.IProjectService;
 import Services.IUserService;
 import Utils.DateUtils;
 
-/**
- * Creates a ProjectManagerController
- *
- * @param userService                user service instance
- * @param projectService             project service instance
- * @param applicationService         application service instance
- * @param officerRegistrationService officer registration service instance
- * @param enquiryService             enquiry service instance (needed for
- *                                   deletion cleanup)
- * @param currentUser                currently logged-in user (must be an
- *                                   HDBManager)
- * @param scanner                    scanner for user input
- * @param authController             authentication controller
- * @throws IllegalArgumentException if currentUser is not an HDBManager
- */
 public class ProjectManagerController extends BaseController {
 
     private final IEnquiryService enquiryService;

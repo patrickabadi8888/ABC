@@ -156,8 +156,8 @@ public class CsvRW {
 
     /**
      * * Returns the appropriate header for a given file based on its name.
-     * @param filename
-     * @return
+     * @param filename The name of the file.
+     * @return The header for the file, or null if the file name is not recognized.
      */
     private static String[] getHeaderForFile(String filename) {
         Path p = Paths.get(filename);

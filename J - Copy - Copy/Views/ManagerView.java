@@ -31,9 +31,9 @@ public class ManagerView extends BaseView {
 
     /**
      * Displays the main menu for the HDB Manager role.
-     * Presents options grouped by function: Project Management, Staff & Application
+     * Presents options grouped by function: Project Management, Staff and Application
      * Management,
-     * Reporting & Enquiries, and Common Actions (filters, password change, logout).
+     * Reporting and Enquiries, and Common Actions (filters, password change, logout).
      * Reads user input and calls the corresponding methods on the ManagerController
      * or BaseView helpers.
      * Loops until the user chooses to logout.

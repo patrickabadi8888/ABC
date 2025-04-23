@@ -14,6 +14,8 @@ import Controllers.ApplicantController;
 import Controllers.AuthController;
 
 public class ApplicantView extends BaseView {
+    private final ApplicantController applicantController;
+    
     /**
      * Constructs a new ApplicantView.
      *
@@ -23,8 +25,6 @@ public class ApplicantView extends BaseView {
      * @param controller     The ApplicantController associated with this view.
      * @param authController Controller for authentication tasks.
      */
-    private final ApplicantController applicantController;
-
     public ApplicantView(Scanner scanner, User currentUser, ApplicantController controller,
             AuthController authController) {
         super(scanner, currentUser, controller, authController);
