@@ -1,8 +1,8 @@
 /**
  * Main controller for the HDB Officer role.
- * It inherits from {@link ApplicantController} to provide standard applicant functionalities
+ * It inherits from {@link ApplicantController} and its standard applicant functionalities
  * (like applying for projects, managing own applications/enquiries).
- * It also delegates officer-specific actions to specialized sub-controllers:
+ * It also delegates officer-specific actions to specialized sub-controllers, applying SRP:
  * - {@link OfficerActionController} for registration and status viewing.
  * - {@link EnquiryOfficerController} for handling enquiries related to the assigned project.
  * - {@link BookingOfficerController} for managing the flat booking process.
@@ -27,8 +27,8 @@ public class OfficerController extends ApplicantController {
 
     /**
      * Constructs a new OfficerController.
-     * Calls the superclass (ApplicantController) constructor to initialize base and
-     * applicant-specific components.
+     * Calls the superclass (ApplicantController) constructor to initialize base
+     * applicant components
      * Instantiates and holds references to the specialized officer action, enquiry,
      * and booking controllers.
      *
@@ -80,7 +80,7 @@ public class OfficerController extends ApplicantController {
     }
 
     /**
-     * Delegates the action to view details of the handling project to the
+     * Delegates the action to view details of the project being handled to the
      * OfficerActionController.
      * 
      * @see OfficerActionController#viewHandlingProjectDetails()
@@ -90,7 +90,8 @@ public class OfficerController extends ApplicantController {
     }
 
     /**
-     * Delegates the action to view and reply to enquiries for the handling project
+     * Delegates the action to view and reply to enquiries for the project being
+     * handled
      * to the EnquiryOfficerController.
      * Note: This is the Officer-specific version, distinct from the applicant's
      * "viewMyEnquiries".
@@ -102,7 +103,7 @@ public class OfficerController extends ApplicantController {
     }
 
     /**
-     * Delegates the action to manage flat bookings to the BookingOfficerController.
+     * Delegates the action to manage bookings to the BookingOfficerController.
      * 
      * @see BookingOfficerController#manageFlatBooking()
      */
