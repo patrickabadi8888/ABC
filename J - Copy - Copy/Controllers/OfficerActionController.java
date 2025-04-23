@@ -80,7 +80,7 @@ public class OfficerActionController extends BaseController {
                 .filter(p -> applicationService.getApplicationsByApplicant(officer.getNric())
                                 .stream()
                                 .noneMatch(app -> app.getProjectName().equals(p.getProjectName())))
-                .sorted(Comparator.comparing(Project::getProjectName)) // Sort alphabetically
+                .sorted(Comparator.comparing((Project p) -> p.getProjectName())) // Sort alphabetically
                 .collect(Collectors.toList());
 
         if (availableProjects.isEmpty()) {
@@ -127,7 +127,7 @@ public class OfficerActionController extends BaseController {
                 .stream()
                 // Filter out the one identified as currently handling (if any)
                 .filter(reg -> handlingProject == null || !reg.getProjectName().equals(handlingProject.getProjectName()))
-                .sorted(Comparator.comparing(OfficerRegistration::getRegistrationDate).reversed()) // Sort by date descending
+                .sorted(Comparator.comparing((OfficerRegistration oR) -> oR.getRegistrationDate()).reversed()) // Sort by date descending
                 .collect(Collectors.toList());
 
         if (myOtherRegistrations.isEmpty() && handlingProject == null) {

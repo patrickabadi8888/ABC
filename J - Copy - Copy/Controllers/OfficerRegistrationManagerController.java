@@ -36,7 +36,7 @@ public class OfficerRegistrationManagerController extends BaseController {
         // Get projects managed by this manager
         List<Project> myProjects = projectService.getProjectsManagedBy(currentUser.getNric())
                                     .stream()
-                                    .sorted(Comparator.comparing(Project::getProjectName))
+                                    .sorted(Comparator.comparing((Project p) -> p.getProjectName()))
                                     .collect(Collectors.toList());
         if (myProjects.isEmpty()) {
             System.out.println("You are not managing any projects for which to manage registrations.");
@@ -56,7 +56,7 @@ public class OfficerRegistrationManagerController extends BaseController {
         // Get registrations for this project using the service
         List<OfficerRegistration> projectRegistrations = officerRegistrationService.getRegistrationsByProject(selectedProject.getProjectName())
                 .stream()
-                .sorted(Comparator.comparing(OfficerRegistration::getRegistrationDate)) // Sort by date
+                .sorted(Comparator.comparing((OfficerRegistration oR) -> oR.getRegistrationDate())) // Sort by date
                 .collect(Collectors.toList());
 
         // Separate pending registrations

@@ -43,8 +43,8 @@ public class EnquiryManagerController extends BaseController {
 
         // Sort by Project Name, then by Date (reversed, newest first)
         allEnquiries.stream()
-            .sorted(Comparator.comparing(Enquiry::getProjectName)
-                              .thenComparing(Enquiry::getEnquiryDate, Comparator.reverseOrder()))
+            .sorted(Comparator.comparing((Enquiry e) -> e.getProjectName())
+                              .thenComparing((Enquiry e) -> e.getEnquiryDate(), Comparator.reverseOrder()))
             .forEach(e -> {
                 printEnquiryDetails(e); // Use helper to print
                 System.out.println("----------------------------------------");
@@ -59,7 +59,7 @@ public class EnquiryManagerController extends BaseController {
                 // Apply view filters (optional, but consistent with menu description)
                 .filter(p -> filterLocation == null || p.getNeighborhood().equalsIgnoreCase(filterLocation))
                 .filter(p -> filterFlatType == null || p.getFlatTypes().containsKey(filterFlatType))
-                .map(Project::getProjectName)
+                .map((Project p) -> p.getProjectName())
                 .collect(Collectors.toList());
 
         if (myManagedProjectNames.isEmpty()) {
@@ -73,8 +73,8 @@ public class EnquiryManagerController extends BaseController {
         List<Enquiry> managedEnquiries = enquiryService.getAllEnquiries().stream()
                 .filter(e -> myManagedProjectNames.contains(e.getProjectName()))
                 // Sort by Project Name, then Date Descending
-                .sorted(Comparator.comparing(Enquiry::getProjectName)
-                                  .thenComparing(Enquiry::getEnquiryDate, Comparator.reverseOrder()))
+                .sorted(Comparator.comparing((Enquiry e) -> e.getProjectName())
+                                  .thenComparing((Enquiry e) -> e.getEnquiryDate(), Comparator.reverseOrder()))
                 .collect(Collectors.toList());
 
         if (managedEnquiries.isEmpty()) {
@@ -88,7 +88,7 @@ public class EnquiryManagerController extends BaseController {
                 .filter(e -> !e.isReplied())
                 .collect(Collectors.toList());
         List<Enquiry> repliedEnquiries = managedEnquiries.stream()
-                .filter(Enquiry::isReplied)
+                .filter((Enquiry e) -> e.isReplied())
                 .collect(Collectors.toList());
 
         // --- Handle Unreplied Managed Enquiries ---

@@ -62,7 +62,7 @@ public class ReportManagerController extends BaseController {
                 return;
             }
             // Let user select one specific project
-            viewAndSelectProject(allMyProjects.stream().sorted(Comparator.comparing(Project::getProjectName)).collect(Collectors.toList()), "Select Specific Project to Report On");
+            viewAndSelectProject(allMyProjects.stream().sorted(Comparator.comparing((Project p) -> p.getProjectName())).collect(Collectors.toList()), "Select Specific Project to Report On");
             Project specificProject = selectProjectFromList(allMyProjects);
             if (specificProject == null) return; // Cancelled selection
             projectsToReportOn.add(specificProject);
@@ -71,7 +71,7 @@ public class ReportManagerController extends BaseController {
 
         // Get list of names of projects to include in the report
         final List<String> finalProjectNames = projectsToReportOn.stream()
-                .map(Project::getProjectName)
+                .map((Project p) -> p.getProjectName())
                 .collect(Collectors.toList());
 
         // --- Filter by Flat Type ---
@@ -144,8 +144,8 @@ public class ReportManagerController extends BaseController {
                     return true; // Include if all filters pass
                 })
                 // Sort the results (e.g., by Project Name then Applicant NRIC)
-                .sorted(Comparator.comparing(BTOApplication::getProjectName)
-                                  .thenComparing(BTOApplication::getApplicantNric))
+                .sorted(Comparator.comparing((BTOApplication app) -> app.getProjectName())
+                                  .thenComparing(app -> app.getApplicantNric()))
                 .collect(Collectors.toList());
 
         // --- Display Report ---
@@ -186,7 +186,7 @@ public class ReportManagerController extends BaseController {
             .stream()
             .filter(p -> filterLocation == null || p.getNeighborhood().equalsIgnoreCase(filterLocation))
             .filter(p -> filterFlatType == null || p.getFlatTypes().containsKey(filterFlatType))
-            .sorted(Comparator.comparing(Project::getProjectName))
+            .sorted(Comparator.comparing((Project p) -> p.getProjectName()))
             .collect(Collectors.toList());
      }
 }

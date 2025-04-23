@@ -85,7 +85,7 @@ public class EnquiryApplicantController extends BaseController {
         List<Enquiry> myEnquiries = enquiryService.getEnquiriesByApplicant(currentUser.getNric())
                 .stream()
                 // Sort by date descending (most recent first)
-                .sorted(Comparator.comparing(Enquiry::getEnquiryDate).reversed())
+                .sorted(Comparator.comparing((Enquiry e) -> e.getEnquiryDate()).reversed())
                 .collect(Collectors.toList());
 
         if (myEnquiries.isEmpty()) {
@@ -117,7 +117,7 @@ public class EnquiryApplicantController extends BaseController {
         List<Enquiry> editableEnquiries = enquiryService.getEnquiriesByApplicant(currentUser.getNric())
                 .stream()
                 .filter(e -> !e.isReplied())
-                .sorted(Comparator.comparing(Enquiry::getEnquiryDate).reversed())
+                .sorted(Comparator.comparing((Enquiry e) -> e.getEnquiryDate()).reversed())
                 .collect(Collectors.toList());
 
         if (editableEnquiries.isEmpty()) {
@@ -163,7 +163,7 @@ public class EnquiryApplicantController extends BaseController {
         List<Enquiry> deletableEnquiries = enquiryService.getEnquiriesByApplicant(currentUser.getNric())
                 .stream()
                 .filter(e -> !e.isReplied())
-                .sorted(Comparator.comparing(Enquiry::getEnquiryDate).reversed())
+                .sorted(Comparator.comparing((Enquiry e) -> e.getEnquiryDate()).reversed())
                 .collect(Collectors.toList());
 
         if (deletableEnquiries.isEmpty()) {

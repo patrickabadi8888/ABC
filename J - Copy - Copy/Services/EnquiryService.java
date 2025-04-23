@@ -74,7 +74,7 @@ public class EnquiryService implements IEnquiryService {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(ENQUIRY_HEADER);
         enquiriesToSave.stream()
-            .sorted(Comparator.comparing(Enquiry::getEnquiryId))
+            .sorted(Comparator.comparing((Enquiry e) -> e.getEnquiryId()))
             .forEach(enq -> {
                 dataList.add(new String[]{
                     enq.getEnquiryId(),

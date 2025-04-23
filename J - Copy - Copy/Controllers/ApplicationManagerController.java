@@ -38,7 +38,7 @@ public class ApplicationManagerController extends BaseController {
         // Get projects managed by this manager
         List<Project> myProjects = projectService.getProjectsManagedBy(currentUser.getNric())
                                     .stream()
-                                    .sorted(Comparator.comparing(Project::getProjectName))
+                                    .sorted(Comparator.comparing(project -> project.getProjectName()))
                                     .collect(Collectors.toList());
         if (myProjects.isEmpty()) {
             System.out.println("You are not managing any projects for which to manage applications.");
@@ -56,7 +56,7 @@ public class ApplicationManagerController extends BaseController {
         // Get all applications for this project via service
         List<BTOApplication> projectApplications = applicationService.getApplicationsByProject(selectedProject.getProjectName())
                 .stream()
-                .sorted(Comparator.comparing(BTOApplication::getApplicationDate)) // Sort by date
+                .sorted(Comparator.comparing(app -> app.getApplicationDate())) // Sort by date
                 .collect(Collectors.toList());
 
         if (projectApplications.isEmpty()) {

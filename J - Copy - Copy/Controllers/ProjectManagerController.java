@@ -304,7 +304,7 @@ public class ProjectManagerController extends BaseController {
                 // 2. Remove associated applications
                 List<String> appIdsToRemove = applicationService.getApplicationsByProject(deletedProjectName)
                                                 .stream()
-                                                .map(BTOApplication::getApplicationId)
+                                                .map((BTOApplication app) -> app.getApplicationId())
                                                 .collect(Collectors.toList());
                 int removedAppCount = 0;
                 for (String appId : appIdsToRemove) {
@@ -320,7 +320,7 @@ public class ProjectManagerController extends BaseController {
                 // 3. Remove associated officer registrations
                 List<String> regIdsToRemove = officerRegistrationService.getRegistrationsByProject(deletedProjectName)
                                                 .stream()
-                                                .map(OfficerRegistration::getRegistrationId)
+                                                .map((OfficerRegistration oR) -> oR.getRegistrationId())
                                                 .collect(Collectors.toList());
                 int removedRegCount = 0;
                 for (String regId : regIdsToRemove) {
@@ -336,7 +336,7 @@ public class ProjectManagerController extends BaseController {
                 // 4. Remove associated enquiries
                 List<String> enqIdsToRemove = enquiryService.getEnquiriesByProject(deletedProjectName)
                                                 .stream()
-                                                .map(Enquiry::getEnquiryId)
+                                                .map((Enquiry e) -> e.getEnquiryId())
                                                 .collect(Collectors.toList());
                 int removedEnqCount = 0;
                  for (String enqId : enqIdsToRemove) {
@@ -402,7 +402,7 @@ public class ProjectManagerController extends BaseController {
         }
 
         // Sort the result
-        managed.sort(Comparator.comparing(Project::getProjectName));
+        managed.sort(Comparator.comparing((Project p) -> p.getProjectName())); // Sort by project name
 
         // Print message if list is empty
         if (managed.isEmpty()) {

@@ -130,7 +130,7 @@ public abstract class BaseController {
                             });
                     return eligibleAndAvailableExists; // Must satisfy both eligibility (if checked) and availability (if checked)
                 })
-                .sorted(Comparator.comparing(Project::getProjectName)) // Sort final filtered list
+                .sorted(Comparator.comparing(project -> project.getProjectName())) // Sort final filtered list
                 .collect(Collectors.toList());
     }
 

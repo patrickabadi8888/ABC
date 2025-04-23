@@ -47,7 +47,7 @@ public class BookingOfficerController extends BaseController {
         List<BTOApplication> successfulApps = applicationService.getApplicationsByProject(handlingProjectName)
                 .stream()
                 .filter(app -> app.getStatus() == ApplicationStatus.SUCCESSFUL)
-                .sorted(Comparator.comparing(BTOApplication::getApplicationDate)) // Sort by application date (FIFO)
+                .sorted(Comparator.comparing(app -> app.getApplicationDate())) // Sort by application date (FIFO)
                 .collect(Collectors.toList());
 
         if (successfulApps.isEmpty()) {

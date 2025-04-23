@@ -1,7 +1,6 @@
 package Controllers;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Scanner;
 import java.util.stream.Collectors;
 import java.util.Comparator;
@@ -124,7 +123,7 @@ public class ApplicantActionController extends BaseController {
         // Filter flat types in the project: user must be eligible AND units must be available
         List<FlatType> eligibleAndAvailableTypes = project.getFlatTypes().entrySet().stream()
                 .filter(entry -> canApplyForFlatType(entry.getKey()) && entry.getValue().getAvailableUnits() > 0)
-                .map(Map.Entry::getKey)
+                .map(entry -> entry.getKey())
                 .sorted() // Sort by enum order
                 .collect(Collectors.toList());
 
@@ -173,7 +172,7 @@ public class ApplicantActionController extends BaseController {
                  System.out.println("However, historical application records exist. The latest was:");
                  // Find the latest application by date
                  BTOApplication latestApp = historicalApps.stream()
-                                                .max(Comparator.comparing(BTOApplication::getApplicationDate))
+                 .max(Comparator.comparing(app -> app.getApplicationDate()))
                                                 .orElse(null);
                  if (latestApp != null) {
                       Project project = projectService.findProjectByName(latestApp.getProjectName());

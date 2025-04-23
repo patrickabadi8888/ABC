@@ -39,7 +39,7 @@ public class WithdrawalManagerController extends BaseController {
         // Get names of projects managed by this manager
         List<String> myProjectNames = projectService.getProjectsManagedBy(currentUser.getNric())
                 .stream()
-                .map(Project::getProjectName)
+                .map((Project p) -> p.getProjectName())
                 .collect(Collectors.toList());
 
         if (myProjectNames.isEmpty()) {
@@ -51,7 +51,7 @@ public class WithdrawalManagerController extends BaseController {
         List<BTOApplication> pendingWithdrawals = applicationService.getAllApplications().values().stream()
                 .filter(app -> app.getStatus() == ApplicationStatus.PENDING_WITHDRAWAL)
                 .filter(app -> myProjectNames.contains(app.getProjectName())) // Filter by managed projects
-                .sorted(Comparator.comparing(BTOApplication::getApplicationDate)) // Sort by date
+                .sorted(Comparator.comparing((BTOApplication app) -> app.getApplicationDate())) // Sort by date
                 .collect(Collectors.toList());
 
         if (pendingWithdrawals.isEmpty()) {

@@ -26,7 +26,7 @@ def write_summary(files_info, output_path):
     with open(output_path, 'w', encoding='utf-8') as out:
         for rel_path, count, class_count, contents in files_info:
             out.write(f"{rel_path} ({count})\n")
-            print(f"{rel_path} ({count}) {class_count})")
+            print(f"{rel_path} ({count})")
             out.write("```java\n")
             out.write(contents)
             # ensure there's a trailing newline before closing the fence
@@ -40,5 +40,4 @@ if __name__ == '__main__':
     
     data = find_java_files_with_contents(start_dir)
     write_summary(data, output_file)
-    print(f"Report written to {output_file}")
     print("Total files found:", len(data))

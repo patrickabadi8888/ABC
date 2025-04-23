@@ -129,7 +129,7 @@ public class CsvRW {
              try (BufferedWriter bw = Files.newBufferedWriter(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 for (String[] row : data) {
                     String line = Arrays.stream(row)
-                                        .map(CsvRW::escapeCsvField) // Use static method reference
+                    .map(field -> CsvRW.escapeCsvField(field)) // Use static method reference
                                         .collect(Collectors.joining(DELIMITER));
                     bw.write(line);
                     bw.newLine(); // Add newline character after each row

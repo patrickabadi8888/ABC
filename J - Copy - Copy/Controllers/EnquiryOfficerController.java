@@ -46,7 +46,7 @@ public class EnquiryOfficerController extends BaseController {
         // Get enquiries for this specific project using the service
         List<Enquiry> projectEnquiries = enquiryService.getEnquiriesByProject(handlingProjectName)
                 .stream()
-                .sorted(Comparator.comparing(Enquiry::getEnquiryDate).reversed()) // Sort by date desc
+                .sorted(Comparator.comparing((Enquiry e) -> e.getEnquiryDate()).reversed()) // Sort by date desc
                 .collect(Collectors.toList());
 
         if (projectEnquiries.isEmpty()) {
@@ -59,7 +59,7 @@ public class EnquiryOfficerController extends BaseController {
                 .filter(e -> !e.isReplied())
                 .collect(Collectors.toList());
         List<Enquiry> repliedEnquiries = projectEnquiries.stream()
-                .filter(Enquiry::isReplied)
+                .filter((Enquiry e) -> e.isReplied())
                 .collect(Collectors.toList());
 
         // --- Handle Unreplied Enquiries ---

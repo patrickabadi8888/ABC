@@ -54,7 +54,7 @@ public class DataService {
                 .forEach(applicant -> {
                     BTOApplication relevantApp = applications.values().stream()
                             .filter(app -> app.getApplicantNric().equals(applicant.getNric()))
-                            .max(Comparator.comparing(BTOApplication::getStatus,
+                            .max(Comparator.comparing((BTOApplication app) -> app.getStatus(), // Compare by status
                                     Comparator.comparingInt(s -> {
                                         // Explicit priority order
                                         switch (s) {
@@ -66,7 +66,7 @@ public class DataService {
                                             case UNSUCCESSFUL: return 1;
                                             default: return 0;
                                         }
-                                    })).thenComparing(BTOApplication::getApplicationDate, Comparator.reverseOrder())) // Prefer latest application for same status
+                                    })).thenComparing((BTOApplication app) -> app.getApplicationDate(), Comparator.reverseOrder())) // Prefer latest application for same status
                             .orElse(null);
 
                     if (relevantApp != null) {

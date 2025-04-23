@@ -74,7 +74,7 @@ public class ApplicationService implements IApplicationService {
                             .findFirst().orElse(null);
                     if (project != null) {
                         bookedCounts.computeIfAbsent(project, _ -> new HashMap<>())
-                                .merge(flatType, 1, Integer::sum);
+                                .merge(flatType, 1, (a, b) -> a + b);
                     } else {
                         System.err.println("Warning: Booked application " + appId + " refers to non-existent project '"
                                 + projectName + "'. Unit count cannot be adjusted.");
@@ -119,7 +119,7 @@ public class ApplicationService implements IApplicationService {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(APPLICATION_HEADER);
         applicationsToSave.values().stream()
-                .sorted(Comparator.comparing(BTOApplication::getApplicationId))
+                .sorted(Comparator.comparing((BTOApplication app) -> app.getApplicationId()))
                 .forEach(app -> {
                     dataList.add(new String[] {
                             app.getApplicationId(),

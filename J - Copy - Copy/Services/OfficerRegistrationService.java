@@ -80,7 +80,7 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
         List<String[]> dataList = new ArrayList<>();
         dataList.add(OFFICER_REGISTRATION_HEADER);
         registrationsToSave.values().stream()
-            .sorted(Comparator.comparing(OfficerRegistration::getRegistrationId))
+            .sorted(Comparator.comparing((OfficerRegistration oR) -> oR.getRegistrationId()))
             .forEach(reg -> {
                 dataList.add(new String[]{
                     reg.getRegistrationId(),
