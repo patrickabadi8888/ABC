@@ -1,3 +1,10 @@
+/**
+ * Controller handling actions performed by an HDB Manager related to managing
+ * BTO applications submitted for the projects they manage (Approving or Rejecting PENDING applications).
+ * Inherits common functionality from BaseController.
+ *
+ * @author Jordon
+ */
 package Controllers;
 
 import java.util.Comparator;
@@ -21,23 +28,62 @@ import Services.IUserService;
 import Utils.DateUtils;
 
 public class ApplicationManagerController extends BaseController {
-
+    /**
+     * Constructs a new ApplicationManagerController.
+     * Ensures the current user is an HDBManager.
+     *
+     * @param userService                Service for user data access.
+     * @param projectService             Service for project data access.
+     * @param applicationService         Service for application data access.
+     * @param officerRegistrationService Service for officer registration data
+     *                                   access.
+     * @param enquiryService             Service for enquiry data access.
+     * @param currentUser                The currently logged-in User (must be
+     *                                   HDBManager).
+     * @param scanner                    Scanner instance for reading user input.
+     * @param authController             Controller for authentication tasks.
+     * @throws IllegalArgumentException if the currentUser is not an HDBManager.
+     */
     public ApplicationManagerController(IUserService userService, IProjectService projectService,
-                                   IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
-                                   IEnquiryService enquiryService,
-                                   User currentUser, Scanner scanner, AuthController authController) {
-        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner, authController);
-         if (!(currentUser instanceof HDBManager)) {
+            IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService,
+            IEnquiryService enquiryService,
+            User currentUser, Scanner scanner, AuthController authController) {
+        super(userService, projectService, applicationService, officerRegistrationService, currentUser, scanner,
+                authController);
+        if (!(currentUser instanceof HDBManager)) {
             throw new IllegalArgumentException("ApplicationManagerController requires an HDBManager user.");
         }
     }
 
-     public void manageApplications() {
+    /**
+     * Guides the HDB Manager through approving or rejecting pending BTO
+     * applications for a selected managed project.
+     * - Displays a list of projects managed by the current manager for selection.
+     * - Retrieves and displays PENDING applications for the selected project.
+     * - Prompts the manager to select a pending application to process.
+     * - Validates that the applicant data is available.
+     * - Prompts for Approve (A) or Reject (R) action.
+     * - If Approve:
+     * - Checks if the application has a valid flat type specified.
+     * - Checks if approving this application would exceed the total units available
+     * for that flat type (considering already SUCCESSFUL or BOOKED applications).
+     * - If checks pass, updates the application status and the applicant's profile
+     * status to SUCCESSFUL, then saves the application data.
+     * - If checks fail (e.g., no units left), informs the manager and does not
+     * approve.
+     * - If Reject:
+     * - Updates the application status and the applicant's profile status to
+     * UNSUCCESSFUL, clears booked flat type on profile, then saves the application
+     * data.
+     * - Displays a summary of applications with other statuses (Successful, Booked,
+     * etc.) for the project.
+     */
+    public void manageApplications() {
         System.out.println("\n--- Manage BTO Applications ---");
         List<Project> myProjects = projectService.getProjectsManagedBy(currentUser.getNric())
-                                    .stream()
-                                    .sorted(Comparator.comparing(project -> project.getProjectName()))
-                                    .collect(Collectors.toList());
+                .stream()
+                .sorted(Comparator.comparing(project -> project.getProjectName()))
+                .collect(Collectors.toList());
         if (myProjects.isEmpty()) {
             System.out.println("You are not managing any projects for which to manage applications.");
             return;
@@ -46,11 +92,13 @@ public class ApplicationManagerController extends BaseController {
         System.out.println("Select project to manage applications for:");
         viewAndSelectProject(myProjects, "Select Project");
         Project selectedProject = selectProjectFromList(myProjects);
-        if (selectedProject == null) return;
+        if (selectedProject == null)
+            return;
 
         System.out.println("\n--- Applications for Project: " + selectedProject.getProjectName() + " ---");
 
-        List<BTOApplication> projectApplications = applicationService.getApplicationsByProject(selectedProject.getProjectName())
+        List<BTOApplication> projectApplications = applicationService
+                .getApplicationsByProject(selectedProject.getProjectName())
                 .stream()
                 .sorted(Comparator.comparing(app -> app.getApplicationDate()))
                 .collect(Collectors.toList());
@@ -107,13 +155,13 @@ public class ApplicationManagerController extends BaseController {
                     }
 
                     Project currentProjectState = projectService.findProjectByName(selectedProject.getProjectName());
-                     if (currentProjectState == null) {
-                          System.out.println("Error: Project details not found. Cannot approve. Rejecting.");
-                          appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
-                          applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
-                          applicationService.saveApplications(applicationService.getAllApplications());
-                          return;
-                     }
+                    if (currentProjectState == null) {
+                        System.out.println("Error: Project details not found. Cannot approve. Rejecting.");
+                        appToProcess.setStatus(ApplicationStatus.UNSUCCESSFUL);
+                        applicant.setApplicationStatus(ApplicationStatus.UNSUCCESSFUL);
+                        applicationService.saveApplications(applicationService.getAllApplications());
+                        return;
+                    }
                     FlatTypeDetails details = currentProjectState.getFlatTypeDetails(appliedType);
 
                     if (details == null) {
@@ -125,21 +173,26 @@ public class ApplicationManagerController extends BaseController {
                         return;
                     }
 
-                    long alreadySuccessfulOrBookedCount = applicationService.getApplicationsByProject(currentProjectState.getProjectName())
+                    long alreadySuccessfulOrBookedCount = applicationService
+                            .getApplicationsByProject(currentProjectState.getProjectName())
                             .stream()
                             .filter(a -> a.getFlatTypeApplied() == appliedType &&
-                                    (a.getStatus() == ApplicationStatus.SUCCESSFUL || a.getStatus() == ApplicationStatus.BOOKED))
+                                    (a.getStatus() == ApplicationStatus.SUCCESSFUL
+                                            || a.getStatus() == ApplicationStatus.BOOKED))
                             .count();
 
                     if (alreadySuccessfulOrBookedCount < details.getTotalUnits()) {
                         appToProcess.setStatus(ApplicationStatus.SUCCESSFUL);
                         applicant.setApplicationStatus(ApplicationStatus.SUCCESSFUL);
-                        System.out.println("Application Approved (Status: SUCCESSFUL). Applicant can now book via Officer.");
+                        System.out.println(
+                                "Application Approved (Status: SUCCESSFUL). Applicant can now book via Officer.");
                         applicationService.saveApplications(applicationService.getAllApplications());
                     } else {
-                        System.out.println("Cannot approve. The number of successful/booked applications (" + alreadySuccessfulOrBookedCount + ") already meets or exceeds the total supply ("
+                        System.out.println("Cannot approve. The number of successful/booked applications ("
+                                + alreadySuccessfulOrBookedCount + ") already meets or exceeds the total supply ("
                                 + details.getTotalUnits() + ") for " + appliedType.getDisplayName() + ".");
-                        System.out.println("Consider rejecting this application or managing existing successful/booked ones.");
+                        System.out.println(
+                                "Consider rejecting this application or managing existing successful/booked ones.");
                     }
 
                 } else if (action.equals("R")) {
@@ -162,7 +215,7 @@ public class ApplicationManagerController extends BaseController {
                 .collect(Collectors.toList());
 
         if (otherApps.isEmpty()) {
-             System.out.println("(None)");
+            System.out.println("(None)");
         } else {
             otherApps.forEach(app -> {
                 User applicant = userService.findUserByNric(app.getApplicantNric());
