@@ -32,21 +32,10 @@ public class UserService implements IUserService {
 
     private Map<String, User> users;
 
-    /**
-     * Constructs a new UserService. Initializes the internal user map.
-     */
     public UserService() {
         this.users = new HashMap<>();
     }
 
-    /**
-     * Loads user data from ApplicantList.csv, OfficerList.csv, and ManagerList.csv.
-     * Validates NRIC format and handles potential duplicates or role conflicts
-     * (e.g., user in multiple files).
-     * Populates the internal user map.
-     *
-     * @return The map containing all loaded users, keyed by NRIC.
-     */
     @Override
     public Map<String, User> loadUsers() {
         this.users.clear();
@@ -122,14 +111,6 @@ public class UserService implements IUserService {
         return this.users;
     }
 
-    /**
-     * Saves the provided map of users back to their respective CSV files
-     * (ApplicantList, OfficerList, ManagerList).
-     * Overwrites the existing files. Updates the internal user map to match the
-     * saved state.
-     *
-     * @param usersToSave The map of users (NRIC to User object) to save.
-     */
     @Override
     public void saveUsers(Map<String, User> usersToSave) {
         List<String[]> applicantData = new ArrayList<>();
@@ -171,24 +152,11 @@ public class UserService implements IUserService {
         }
     }
 
-    /**
-     * Finds a user by their NRIC from the internally managed map.
-     *
-     * @param nric The NRIC of the user to find.
-     * @return The User object if found, or null otherwise.
-     */
     @Override
     public User findUserByNric(String nric) {
         return this.users.get(nric);
     }
 
-    /**
-     * Retrieves a copy of the map containing all users currently managed by the
-     * service.
-     * Returning a copy prevents external modification of the internal state.
-     *
-     * @return A new HashMap containing all users (NRIC to User object).
-     */
     @Override
     public Map<String, User> getAllUsers() {
         return new HashMap<>(this.users);
