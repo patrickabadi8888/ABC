@@ -38,31 +38,6 @@ public class DataService {
     private static final String[] APPLICANT_HEADER = { "Name", "NRIC", "Age", "Marital Status", "Password" };
     private static final String[] OFFICER_HEADER = { "Name", "NRIC", "Age", "Marital Status", "Password" };
     private static final String[] MANAGER_HEADER = { "Name", "NRIC", "Age", "Marital Status", "Password" };
-
-    /**
-     * Performs data synchronization checks and updates after initial loading.
-     * - Synchronizes Applicant profile status (appliedProjectName,
-     * applicationStatus, bookedFlatType) based on the latest relevant
-     * BTOApplication record.
-     * - Synchronizes Project approved officer lists with OfficerRegistration
-     * records:
-     * - Creates/updates APPROVED registrations if an officer is listed in a
-     * project's CSV but lacks a corresponding registration.
-     * - Issues warnings if an APPROVED registration exists but the officer is
-     * missing from the project's CSV list.
-     * - Note: Adjustment of project available units based on booked applications is
-     * now handled within ApplicationService.loadApplications.
-     * Saves officer registrations if any changes were made during synchronization.
-     *
-     * @param userService                The user service instance containing loaded
-     *                                   user data.
-     * @param projectService             The project service instance containing
-     *                                   loaded project data.
-     * @param applicationService         The application service instance containing
-     *                                   loaded application data.
-     * @param officerRegistrationService The officer registration service instance
-     *                                   containing loaded registration data.
-     */
     public static void synchronizeData(IUserService userService, IProjectService projectService,
             IApplicationService applicationService, IOfficerRegistrationService officerRegistrationService) {
         System.out.println("Synchronizing loaded data...");
@@ -166,17 +141,6 @@ public class DataService {
         System.out.println("Data synchronization complete.");
     }
 
-    /**
-     * Saves all data managed by the provided services to their respective
-     * persistent storage locations (CSV files).
-     * This is a convenience method typically called during application shutdown.
-     *
-     * @param userService                The user service instance.
-     * @param projectService             The project service instance.
-     * @param applicationService         The application service instance.
-     * @param enquiryService             The enquiry service instance.
-     * @param officerRegistrationService The officer registration service instance.
-     */
     public static void saveAllData(IUserService userService, IProjectService projectService,
             IApplicationService applicationService, IEnquiryService enquiryService,
             IOfficerRegistrationService officerRegistrationService) {
@@ -189,16 +153,6 @@ public class DataService {
         System.out.println("All data saved.");
     }
 
-    /**
-     * Static method to save user data to respective CSV files (ApplicantList,
-     * OfficerList, ManagerList).
-     * This method duplicates the logic in {@link UserService#saveUsers(Map)} and is
-     * kept primarily for compatibility
-     * with {@link AuthController} which uses it directly. Ideally, AuthController
-     * should use IUserService.
-     *
-     * @param users The map of users (NRIC to User object) to save.
-     */
     public static void saveUsers(Map<String, User> users) {
         List<String[]> applicantData = new ArrayList<>();
         List<String[]> officerData = new ArrayList<>();
