@@ -49,18 +49,6 @@ public class CsvRW {
     private static final String[] ENQUIRY_HEADER = {"EnquiryID", "ApplicantNRIC", "ProjectName", "EnquiryText", "ReplyText", "RepliedByNRIC", "EnquiryDate", "ReplyDate"};
     private static final String[] OFFICER_REGISTRATION_HEADER = {"RegistrationID", "OfficerNRIC", "ProjectName", "Status", "RegistrationDate"};
 
-/**
- * Reads data from a specified CSV file.
- * Skips the header row and empty lines.
- * Attempts to handle quoted fields containing the delimiter.
- * Validates the number of columns per row against the expected count.
- * If the file doesn't exist, it attempts to create it with the appropriate header.
- * Handles a specific edge case for older ProjectList.csv files missing the 'Visibility' column.
- *
- * @param filename The path to the CSV file.
- * @param expectedColumns The expected number of columns in each data row (excluding header).
- * @return A List of String arrays, where each array represents a row of data. Returns an empty list if the file doesn't exist or contains no valid data.
- */
     public static List<String[]> readCsv(String filename, int expectedColumns) {
         List<String[]> data = new ArrayList<>();
         Path path = Paths.get(filename);
@@ -123,15 +111,7 @@ public class CsvRW {
         }
         return data;
     }
-
-    /**
- * Writes data to a specified CSV file, overwriting existing content.
- * Ensures the parent directory exists.
- * Escapes fields containing delimiters, quotes, or newlines before writing.
- *
- * @param filename The path to the CSV file.
- * @param data A List of String arrays, where the first array is typically the header and subsequent arrays are data rows.
- */
+    
     public static void writeCsv(String filename, List<String[]> data) {
         Path path = Paths.get(filename);
         try {
@@ -153,12 +133,7 @@ public class CsvRW {
             System.err.println("Error writing file: " + filename + " - " + e.getMessage());
         }
     }
-
-    /**
-     * * Returns the appropriate header for a given file based on its name.
-     * @param filename The name of the file.
-     * @return The header for the file, or null if the file name is not recognized.
-     */
+    
     private static String[] getHeaderForFile(String filename) {
         Path p = Paths.get(filename);
         String baseName = p.getFileName().toString();
@@ -174,13 +149,6 @@ public class CsvRW {
         return null;
     }
 
-    /**
-     * Escapes a CSV field by enclosing it in quotes if it contains the delimiter,
-     * quotes, or newlines. Also doubles any existing quotes within the field.
-     *
-     * @param field The field to escape.
-     * @return The escaped field.
-     */
     private static String escapeCsvField(String field) {
         if (field == null) return "";
         if (field.contains(DELIMITER) || field.contains("\"") || field.contains(LIST_DELIMITER) || field.contains("\n") || field.contains("\r")) {
