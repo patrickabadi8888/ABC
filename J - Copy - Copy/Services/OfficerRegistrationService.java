@@ -33,28 +33,10 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
 
     private Map<String, OfficerRegistration> registrations;
 
-    /**
-     * Constructs a new OfficerRegistrationService. Initializes the internal
-     * registration map.
-     */
     public OfficerRegistrationService() {
         this.registrations = new HashMap<>();
     }
 
-    /**
-     * Loads officer registration data from officer_registrations.csv.
-     * Validates registration IDs (uniqueness), dates, enum values, officer NRICs
-     * (must exist in `users` and be an HDBOfficer),
-     * and project names (must exist in `projects`).
-     * Populates the internal registration map.
-     *
-     * @param users    A map of NRIC to User objects, used for validating officer
-     *                 NRICs.
-     * @param projects A list of all Project objects, used for validating project
-     *                 names.
-     * @return A copy of the map containing all loaded and validated registrations
-     *         (RegistrationID to OfficerRegistration object).
-     */
     @Override
     public Map<String, OfficerRegistration> loadOfficerRegistrations(Map<String, User> users, List<Project> projects) {
         this.registrations.clear();
@@ -105,15 +87,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
         return new HashMap<>(this.registrations);
     }
 
-    /**
-     * Saves the provided map of officer registrations to officer_registrations.csv.
-     * Formats registration data for CSV storage.
-     * Overwrites the existing file. Updates the internal registration map to match
-     * the saved state.
-     *
-     * @param registrationsToSave The map of registrations (RegistrationID to
-     *                            OfficerRegistration object) to save.
-     */
     @Override
     public void saveOfficerRegistrations(Map<String, OfficerRegistration> registrationsToSave) {
         List<String[]> dataList = new ArrayList<>();
@@ -134,27 +107,11 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
         this.registrations = new HashMap<>(registrationsToSave);
     }
 
-    /**
-     * Finds an officer registration by its unique ID from the internally managed
-     * map.
-     *
-     * @param registrationId The ID of the registration to find.
-     * @return The OfficerRegistration object if found, or null otherwise.
-     */
     @Override
     public OfficerRegistration findRegistrationById(String registrationId) {
         return this.registrations.get(registrationId);
     }
 
-    /**
-     * Retrieves a list of all registrations (regardless of status) made by a
-     * specific HDB Officer.
-     * Filters the internal registration map based on the officerNric field.
-     *
-     * @param officerNric The NRIC of the officer.
-     * @return A list of OfficerRegistration objects for the specified officer.
-     *         Returns an empty list if NRIC is null or no registrations are found.
-     */
     @Override
     public List<OfficerRegistration> getRegistrationsByOfficer(String officerNric) {
         if (officerNric == null)
@@ -164,16 +121,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Retrieves a list of all registrations (regardless of status) associated with
-     * a specific project.
-     * Filters the internal registration map based on the projectName field.
-     *
-     * @param projectName The name of the project.
-     * @return A list of OfficerRegistration objects for the specified project.
-     *         Returns an empty list if projectName is null or no registrations are
-     *         found.
-     */
     @Override
     public List<OfficerRegistration> getRegistrationsByProject(String projectName) {
         if (projectName == null)
@@ -183,15 +130,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Retrieves a list of all officer registrations that currently have a specific
-     * status.
-     * Filters the internal registration map based on the status field.
-     *
-     * @param status The OfficerRegistrationStatus to filter by.
-     * @return A list of OfficerRegistration objects with the specified status.
-     *         Returns an empty list if status is null or no registrations match.
-     */
     @Override
     public List<OfficerRegistration> getRegistrationsByStatus(OfficerRegistrationStatus status) {
         if (status == null)
@@ -201,16 +139,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Finds the specific registration record indicating which project an officer is
-     * currently approved to handle.
-     * Filters for APPROVED status and returns the first match found. Assumes an
-     * officer handles at most one project at a time.
-     *
-     * @param officerNric The NRIC of the officer.
-     * @return The OfficerRegistration object with APPROVED status for the officer,
-     *         or null if none is found or NRIC is null.
-     */
     @Override
     public OfficerRegistration getApprovedRegistrationForOfficer(String officerNric) {
         if (officerNric == null)
@@ -222,13 +150,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
                 .orElse(null);
     }
 
-    /**
-     * Adds a new officer registration to the internal map if a registration with
-     * the same ID doesn't already exist.
-     * Prints an error message if a duplicate ID is detected.
-     *
-     * @param registration The OfficerRegistration object to add.
-     */
     @Override
     public void addRegistration(OfficerRegistration registration) {
         if (registration != null && !this.registrations.containsKey(registration.getRegistrationId())) {
@@ -238,13 +159,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
         }
     }
 
-    /**
-     * Removes an officer registration from the internal map based on its ID.
-     *
-     * @param registrationId The ID of the registration to remove. If null, the
-     *                       method does nothing.
-     * @return true if the registration was found and removed, false otherwise.
-     */
     @Override
     public boolean removeRegistration(String registrationId) {
         if (registrationId != null) {
@@ -253,14 +167,6 @@ public class OfficerRegistrationService implements IOfficerRegistrationService {
         return false;
     }
 
-    /**
-     * Retrieves a copy of the map containing all officer registrations currently
-     * managed by the service.
-     * Returning a copy prevents external modification of the internal state.
-     *
-     * @return A new HashMap containing all registrations (RegistrationID to
-     *         OfficerRegistration object).
-     */
     @Override
     public Map<String, OfficerRegistration> getAllRegistrations() {
         return new HashMap<>(this.registrations);
